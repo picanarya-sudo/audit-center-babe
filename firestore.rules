@@ -1,0 +1,72 @@
+// firestore.rules
+// ==================================================================
+// Pemisahan role SUNGGUHAN di level server - menggantikan tombol
+// "pilih peran" di demo HTML yang cuma simulasi UI, bisa dibongkar
+// lewat DevTools siapa saja. Ini dicek oleh Firestore sendiri,
+// bukan oleh kode frontend.
+//
+// PRASYARAT yang belum diatur di sini (harus ditambah saat setup Auth):
+//   - Custom claims di Firebase Auth: role = 'auditor' | 'brand'
+//     Contoh set claim (dijalankan sekali dari Admin SDK / Cloud Function):
+//       admin.auth().setCustomUserClaims(uid, { role: 'auditor' });
+// ==================================================================
+
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    function role() {
+      return request.auth.token.role;
+    }
+    function isAuditor() {
+      return isSignedIn() && role() == 'auditor';
+    }
+    function isBrand() {
+      return isSignedIn() && role() == 'brand';
+    }
+
+    // customers & orders: kedua role boleh baca (brand butuh untuk analytics,
+    // auditor butuh untuk lihat riwayat). Tidak ada yang boleh tulis langsung
+    // dari client - penulisan cuma lewat Cloud Function (Admin SDK, yang
+    // otomatis bypass rules ini).
+    match /customers/{customerId} {
+      allow read: if isAuditor() || isBrand();
+      allow write: if false; // hanya via Cloud Function
+    }
+
+    match /orders/{orderId} {
+      allow read: if isAuditor() || isBrand();
+      allow write: if false; // hanya via Cloud Function
+    }
+
+    // audits (task queue): HANYA auditor boleh baca & tulis (isi form audit).
+    // Brand TIDAK BOLEH menyentuh ini sama sekali - baik baca maupun tulis -
+    // supaya tidak bisa mengubah status audit secara tidak sengaja atau sengaja.
+    match /audits/{customerId} {
+      allow read: if isAuditor();
+      allow write: if isAuditor();
+    }
+
+    // sku_costs: brand boleh baca (referensi), tulis cuma via Cloud Function
+    // (dipicu bulk-upload CSV, bukan tulis langsung dari client).
+    match /sku_costs/{skuId} {
+      allow read: if isAuditor() || isBrand();
+      allow write: if false;
+    }
+
+    // analytics_cache (agregat yang di-precompute, kalau nanti dibutuhkan
+    // untuk performa - bukan compute on-the-fly di 40rb+ dokumen tiap load):
+    match /analytics_cache/{docId} {
+      allow read: if isBrand();
+      allow write: if false;
+    }
+
+    // default: tolak semua yang tidak eksplisit di atas
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
