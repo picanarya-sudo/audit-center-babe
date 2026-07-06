@@ -1,0 +1,28 @@
+name: Deploy Firebase
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout kode
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      - name: Install dependency functions
+        run: cd functions && npm install
+
+      - name: Autentikasi ke Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: '${{ secrets.FIREBASE_SERVICE_ACCOUNT }}'
+
+      - name: Deploy ke Firebase
+        run: npx firebase-tools deploy --only firestore:rules,functions,hosting
