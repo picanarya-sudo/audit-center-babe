@@ -156,7 +156,7 @@ exports.onAuditorUpload = functions.storage.object().onFinalize(async (object) =
 // ============================================================
 // TRIGGER 2: Bulk seed oleh Tim Brand (format lama, TIDAK buat task)
 // ============================================================
-exports.onBrandBulkUpload = functions.storage.object().onFinalize(async (object) => {
+exports.onAuditorUpload = functions.region('asia-southeast2').storage.object().onFinalize(async (object) => {
   if (!object.name.startsWith('brand-uploads/')) return null;
 
   const [fileContents] = await bucket.file(object.name).download();
