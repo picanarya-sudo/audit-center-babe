@@ -1,0 +1,508 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Audit Center</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#14171A; --panel:#14171A; --panel-2:#1D2126; --border:#272C31;
+    --text:#ECEEF0; --text-dim:#9BA2A9; --text-faint:#5C646B;
+    --ct-bg:#F5F1E8; --ct-panel:#FFFFFF; --ct-panel-2:#FAF6EC; --ct-border:#E3DCC8;
+    --ct-text:#201D18; --ct-text-dim:#6E6656; --ct-text-faint:#A79E88;
+    --urgent:#C4472A; --urgent-bg:rgba(196,71,42,0.14);
+    --medium:#B5811F; --medium-bg:rgba(181,129,31,0.15);
+    --low:#7A7566; --low-bg:rgba(122,117,102,0.16);
+    --accent:#C4472A; --good:#4B7355; --good-bg:rgba(75,115,85,0.14);
+    --radius:6px;
+  }
+  *{box-sizing:border-box;}
+  html,body{height:100%;margin:0;}
+  body{background:var(--ct-bg);color:var(--ct-text);font-family:'Inter',system-ui,sans-serif;font-size:14px;}
+  .mono{font-family:'JetBrains Mono',monospace;}
+
+  /* ===== Landing / login (satu pintu masuk untuk kedua role) ===== */
+  #login-screen{height:100vh;display:flex;align-items:center;justify-content:center;background:var(--panel);}
+  #login-box{width:100%;max-width:360px;padding:36px 32px;background:var(--panel-2);border:1px solid var(--border);border-radius:10px;}
+  #login-box .brand{display:flex;align-items:center;gap:10px;margin-bottom:6px;}
+  #login-box .dot{width:11px;height:11px;border-radius:3px;background:var(--accent);}
+  #login-box h1{color:var(--text);font-size:16px;margin:0;text-transform:uppercase;letter-spacing:0.3px;}
+  #login-box .sub{color:var(--text-faint);font-size:11.5px;margin:6px 0 22px;}
+  #login-box input{width:100%;padding:9px 10px;margin-bottom:10px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);font-size:13px;}
+  #login-box button{width:100%;padding:10px;background:var(--accent);color:#fff;border:none;border-radius:var(--radius);font-weight:700;cursor:pointer;}
+  #login-error{color:var(--urgent);font-size:11.5px;margin-top:8px;min-height:16px;}
+  #login-note{margin-top:16px;font-size:10.5px;color:var(--text-faint);line-height:1.5;border-top:1px solid var(--border);padding-top:12px;}
+  #config-warning{position:fixed;bottom:0;left:0;right:0;background:var(--urgent);color:#fff;padding:10px 20px;font-size:12.5px;text-align:center;z-index:100;}
+
+  /* ===== Auditor App ===== */
+  #auditor-app{display:none;flex-direction:column;height:100vh;}
+  #a-topbar, #b-topbar{display:flex;align-items:center;gap:16px;padding:12px 20px;background:var(--panel);border-bottom:1px solid var(--border);flex-wrap:wrap;}
+  #a-topbar .title, #b-topbar .title{color:var(--text);font-weight:700;font-size:15px;text-transform:uppercase;}
+  .stat{padding:4px 12px;border-left:1px solid var(--border);}
+  .stat .n{font-family:'JetBrains Mono',monospace;font-weight:700;font-size:17px;color:var(--text);}
+  .stat .l{font-size:10px;color:var(--text-faint);text-transform:uppercase;}
+  .stat.urgent .n{color:var(--urgent);} .stat.medium .n{color:var(--medium);}
+  .topbar-right{margin-left:auto;display:flex;align-items:center;gap:10px;}
+  .topbar-right button{background:transparent;border:1px solid var(--border);color:var(--text-faint);border-radius:14px;padding:5px 12px;font-size:11px;cursor:pointer;}
+  #a-main{display:flex;flex:1;min-height:0;}
+  #a-sidebar{width:360px;border-right:1px solid var(--border);background:var(--panel);display:flex;flex-direction:column;}
+  #a-search{margin:12px;padding:8px 10px;background:var(--panel-2);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);}
+  #a-filters{display:flex;gap:6px;padding:0 12px 12px;flex-wrap:wrap;}
+  .chip{padding:6px 12px;border-radius:4px;border:1px solid var(--border);background:var(--panel-2);color:var(--text-dim);font-size:11px;font-weight:600;cursor:pointer;}
+  .chip.active{color:var(--text);border-color:var(--text-faint);background:#252A2F;}
+  #a-list{flex:1;overflow-y:auto;}
+  #a-list-status{padding:16px;color:var(--text-faint);font-size:12px;}
+  .row{padding:12px 14px;border-bottom:1px solid var(--border);border-left:3px solid transparent;cursor:pointer;}
+  .row:hover{background:var(--panel-2);}
+  .row.selected{background:var(--panel-2);border-left-color:var(--accent);}
+  .row .r1{display:flex;justify-content:space-between;align-items:center;}
+  .row .name{color:var(--text);font-weight:600;font-size:13.5px;text-transform:capitalize;}
+  .badge{font-size:9.5px;font-weight:700;padding:2px 7px;border-radius:3px;text-transform:uppercase;}
+  .badge.Urgent{background:var(--urgent-bg);color:var(--urgent);}
+  .badge.Medium{background:var(--medium-bg);color:var(--medium);}
+  .badge.Low{background:var(--low-bg);color:var(--text-dim);}
+  .row .r2{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--text-dim);margin-top:4px;}
+  #a-detail{flex:1;overflow-y:auto;background:var(--ct-bg);}
+  #a-empty{height:100%;display:flex;align-items:center;justify-content:center;color:var(--ct-text-faint);}
+  #a-detail-inner{display:none;padding:28px 36px 60px;max-width:900px;}
+  #a-detail-inner h1{font-size:24px;color:var(--ct-text);text-transform:capitalize;margin:0;}
+  #a-detail-inner .phone{font-family:'JetBrains Mono',monospace;color:var(--ct-text-dim);font-size:12.5px;}
+  .card{background:var(--ct-panel);border:1px solid var(--ct-border);border-radius:var(--radius);padding:18px;margin-top:18px;}
+  .field{margin-bottom:16px;}
+  .field label{display:block;font-size:12px;font-weight:600;color:var(--ct-text);margin-bottom:7px;}
+  .yn{display:flex;gap:10px;}
+  .yn button{flex:1;padding:10px;border-radius:var(--radius);border:1px solid var(--ct-border);background:var(--ct-panel-2);color:var(--ct-text-dim);font-weight:600;cursor:pointer;}
+  .yn button.on.yes{background:var(--urgent-bg);border-color:var(--urgent);color:var(--urgent);}
+  .yn button.on.no{background:var(--good-bg);border-color:var(--good);color:var(--good);}
+  textarea{width:100%;padding:10px;background:var(--ct-panel-2);border:1px solid var(--ct-border);border-radius:var(--radius);color:var(--ct-text);font-family:'Inter',sans-serif;resize:vertical;}
+  #a-save-btn{background:var(--accent);color:#fff;border:none;padding:10px 20px;border-radius:var(--radius);font-weight:700;cursor:pointer;margin-top:10px;}
+  #a-save-status{font-size:11.5px;color:var(--ct-text-faint);margin-left:10px;}
+  #a-save-status.ok{color:var(--good);}
+
+  /* ===== Brand Analytics App ===== */
+  #brand-app{display:none;flex-direction:column;height:100vh;}
+  #b-body{flex:1;overflow-y:auto;background:var(--ct-bg);}
+  #b-inner{max-width:1180px;margin:0 auto;padding:28px 36px 60px;}
+  .warnbox{background:var(--ct-panel);border:1px solid var(--ct-border);border-left:3px solid var(--urgent);border-radius:var(--radius);padding:14px 18px;margin-bottom:24px;font-size:12.5px;color:var(--ct-text-dim);}
+  .kpi-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;margin-bottom:30px;}
+  .kpi-card{background:var(--ct-panel);border:1px solid var(--ct-border);border-radius:var(--radius);padding:16px 18px;}
+  .kpi-card.na{border-left:3px solid var(--medium);}
+  .kpi-card .kv{font-family:'JetBrains Mono',monospace;font-size:22px;font-weight:700;color:var(--ct-text);}
+  .kpi-card.na .kv{font-size:14px;color:var(--ct-text-faint);}
+  .kpi-card .kl{font-size:10.5px;color:var(--ct-text-faint);text-transform:uppercase;margin-top:4px;}
+  .kpi-card .ks{font-size:10.5px;color:var(--ct-text-dim);margin-top:6px;line-height:1.4;}
+  .section-title{font-size:11px;font-weight:700;text-transform:uppercase;color:var(--ct-text-faint);margin:30px 0 12px;padding-bottom:8px;border-bottom:1px solid var(--ct-border);}
+  .an-table{width:100%;border-collapse:collapse;background:var(--ct-panel);border:1px solid var(--ct-border);border-radius:var(--radius);overflow:hidden;}
+  .an-table th{text-align:left;font-size:10px;text-transform:uppercase;color:var(--ct-text-faint);padding:10px 14px;background:var(--ct-panel-2);border-bottom:1px solid var(--ct-border);}
+  .an-table td{padding:10px 14px;font-size:12.5px;border-bottom:1px solid var(--ct-border);}
+  .churn-tabs{display:flex;gap:8px;margin-bottom:14px;}
+  .churn-tabs button{padding:7px 16px;border-radius:20px;border:1px solid var(--ct-border);background:var(--ct-panel);color:var(--ct-text-dim);font-size:12px;font-weight:600;cursor:pointer;}
+  .churn-tabs button.active{background:var(--accent);color:#fff;border-color:var(--accent);}
+  #b-month-picker{padding:7px 10px;border-radius:var(--radius);border:1px solid var(--ct-border);background:var(--ct-panel);}
+  #bulk-modal{position:fixed;inset:0;background:rgba(20,18,14,0.55);display:none;align-items:center;justify-content:center;z-index:50;}
+  #bulk-modal.show{display:flex;}
+  #bulk-box{background:var(--ct-panel);border-radius:10px;padding:26px;max-width:480px;width:90%;}
+  #bulk-box input[type=file]{margin:14px 0;}
+  #bulk-status{font-size:12px;color:var(--ct-text-dim);margin-top:10px;}
+</style>
+</head>
+<body>
+
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+  import {
+    getAuth, signInWithEmailAndPassword, onAuthStateChanged, signOut
+  } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+  import {
+    getFirestore, collection, query, where, orderBy, limit, getDocs, doc,
+    updateDoc, serverTimestamp, onSnapshot, getCountFromServer,
+    getAggregateFromServer, sum, average
+  } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+  import {
+    getStorage, ref, uploadBytes
+  } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-storage.js";
+
+  // TODO: GANTI dengan config project Firebase asli. Placeholder ini
+  // sengaja dibuat gagal supaya tidak ada kesan "sudah jalan" padahal
+  // belum diisi.
+  const firebaseConfig = {
+    apiKey: "GANTI_DENGAN_API_KEY_ASLI",
+    authDomain: "GANTI.firebaseapp.com",
+    projectId: "GANTI_PROJECT_ID",
+    storageBucket: "GANTI.appspot.com",
+    messagingSenderId: "GANTI",
+    appId: "GANTI",
+  };
+  if (!firebaseConfig.apiKey.startsWith("GANTI")) {
+    // ok, config sudah diisi
+  } else {
+    document.getElementById('config-warning').style.display = 'block';
+  }
+
+  const app = initializeApp(firebaseConfig);
+  const auth = getAuth(app);
+  const db = getFirestore(app);
+  const storage = getStorage(app);
+
+  let unsubscribeAudits = null;
+
+  // ============================================================
+  // LOGIN TERPADU - satu form, routing ke app yang sesuai setelah
+  // Firebase mengembalikan custom claim role. Auditor dan Brand
+  // TIDAK pilih tampilan sendiri - itu ditentukan oleh role di akun
+  // mereka, bukan oleh tombol di UI (beda dari demo lama).
+  // ============================================================
+  document.getElementById('login-btn').addEventListener('click', async () => {
+    const email = document.getElementById('login-email').value.trim();
+    const pass = document.getElementById('login-pass').value;
+    const errEl = document.getElementById('login-error');
+    errEl.textContent = '';
+    try {
+      await signInWithEmailAndPassword(auth, email, pass);
+    } catch (e) {
+      errEl.textContent = 'Login gagal: ' + e.message;
+    }
+  });
+
+  function doLogout() {
+    if (unsubscribeAudits) unsubscribeAudits();
+    signOut(auth);
+  }
+  document.getElementById('a-logout-btn').addEventListener('click', doLogout);
+  document.getElementById('b-logout-btn').addEventListener('click', doLogout);
+
+  onAuthStateChanged(auth, async (user) => {
+    hideAll();
+    if (!user) {
+      document.getElementById('login-screen').style.display = 'flex';
+      return;
+    }
+
+    const tokenResult = await user.getIdTokenResult();
+    const role = tokenResult.claims.role;
+
+    if (role === 'auditor') {
+      document.getElementById('auditor-app').style.display = 'flex';
+      initAuditorApp();
+    } else if (role === 'brand') {
+      document.getElementById('brand-app').style.display = 'flex';
+      initBrandApp();
+    } else {
+      document.getElementById('login-screen').style.display = 'flex';
+      document.getElementById('login-error').textContent =
+        'Akun ini belum punya role (auditor/brand). Hubungi admin untuk set custom claim - lihat DEPLOY_TUTORIAL.md.';
+      await signOut(auth);
+    }
+  });
+
+  function hideAll() {
+    document.getElementById('login-screen').style.display = 'none';
+    document.getElementById('auditor-app').style.display = 'none';
+    document.getElementById('brand-app').style.display = 'none';
+  }
+
+  // ============================================================
+  // AUDITOR APP
+  // ============================================================
+  let allAudits = [];
+  let selectedId = null;
+  let priorityFilter = 'all';
+  let searchTerm = '';
+
+  function initAuditorApp() {
+    const q = query(collection(db, 'audits'), orderBy('updated_at', 'desc'));
+    unsubscribeAudits = onSnapshot(q, (snap) => {
+      allAudits = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      renderAuditorStats();
+      applyAuditorFilters();
+      document.getElementById('a-list-status').style.display = allAudits.length === 0 ? 'block' : 'none';
+    }, (err) => {
+      document.getElementById('a-list-status').style.display = 'block';
+      document.getElementById('a-list-status').textContent = 'Gagal memuat: ' + err.message;
+    });
+  }
+
+  function renderAuditorStats() {
+    document.getElementById('stat-urgent').textContent = allAudits.filter(a => a.priority === 'Urgent').length;
+    document.getElementById('stat-medium').textContent = allAudits.filter(a => a.priority === 'Medium').length;
+    document.getElementById('stat-total').textContent = allAudits.length;
+  }
+
+  function applyAuditorFilters() {
+    let list = allAudits;
+    if (priorityFilter !== 'all') list = list.filter(a => a.priority === priorityFilter);
+    if (searchTerm.trim()) {
+      const q = searchTerm.toLowerCase();
+      list = list.filter(a => (a.customer_name||'').toLowerCase().includes(q) || (a.customer_phone||'').includes(q));
+    }
+    renderAuditorList(list);
+  }
+
+  function renderAuditorList(list) {
+    const el = document.getElementById('a-list');
+    el.innerHTML = list.map(a => `
+      <div class="row ${a.id===selectedId?'selected':''}" data-id="${a.id}">
+        <div class="r1">
+          <span class="name">${escapeHtml(a.customer_name || '(tanpa nama)')}</span>
+          <span class="badge ${a.priority}">${a.priority}</span>
+        </div>
+        <div class="r2">${a.customer_phone||''} · status: ${a.status||'pending'}</div>
+      </div>
+    `).join('');
+    el.querySelectorAll('.row').forEach(rowEl => {
+      rowEl.addEventListener('click', () => {
+        selectedId = rowEl.dataset.id;
+        applyAuditorFilters();
+        renderAuditorDetail(allAudits.find(a => a.id === selectedId));
+      });
+    });
+  }
+
+  function renderAuditorDetail(audit) {
+    document.getElementById('a-empty').style.display = 'none';
+    const inner = document.getElementById('a-detail-inner');
+    inner.style.display = 'block';
+    inner.innerHTML = `
+      <h1>${escapeHtml(audit.customer_name || '(tanpa nama)')}</h1>
+      <div class="phone">${audit.customer_phone||''} · Order terakhir: Rp${(audit.last_order_nominal||0).toLocaleString('id-ID')}</div>
+      <div class="card">
+        <div class="field"><label>Telat Bales?</label><div class="yn">
+          <button data-f="telat_bales" data-v="yes" class="${audit.telat_bales==='yes'?'on yes':''}">Ya</button>
+          <button data-f="telat_bales" data-v="no" class="${audit.telat_bales==='no'?'on no':''}">Tidak</button>
+        </div></div>
+        <div class="field"><label>Salah Barang?</label><div class="yn">
+          <button data-f="salah_barang" data-v="yes" class="${audit.salah_barang==='yes'?'on yes':''}">Ya</button>
+          <button data-f="salah_barang" data-v="no" class="${audit.salah_barang==='no'?'on no':''}">Tidak</button>
+        </div></div>
+        <div class="field"><label>Alasan Cancel</label><textarea id="a-alasan-cancel" rows="2">${escapeHtml(audit.alasan_cancel||'')}</textarea></div>
+        <div class="field"><label>Summary Respons Customer</label><textarea id="a-summary" rows="3">${escapeHtml(audit.summary_respons||'')}</textarea></div>
+        <button id="a-save-btn">Simpan Audit</button>
+        <span id="a-save-status"></span>
+      </div>
+    `;
+    const local = { ...audit };
+    inner.querySelectorAll('.yn button').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const f = btn.dataset.f, v = btn.dataset.v;
+        local[f] = local[f] === v ? null : v;
+        btn.parentElement.querySelectorAll('button').forEach(b => b.classList.remove('on','yes','no'));
+        if (local[f]) btn.classList.add('on', v);
+      });
+    });
+    document.getElementById('a-save-btn').addEventListener('click', async () => {
+      const statusEl = document.getElementById('a-save-status');
+      statusEl.textContent = 'Menyimpan...'; statusEl.className = '';
+      try {
+        await updateDoc(doc(db, 'audits', audit.id), {
+          telat_bales: local.telat_bales || null,
+          salah_barang: local.salah_barang || null,
+          alasan_cancel: document.getElementById('a-alasan-cancel').value,
+          summary_respons: document.getElementById('a-summary').value,
+          status: 'reviewed',
+          updated_at: serverTimestamp(),
+        });
+        statusEl.textContent = '✓ Tersimpan'; statusEl.className = 'ok';
+      } catch (e) {
+        statusEl.textContent = '✗ Gagal: ' + e.message;
+      }
+    });
+  }
+
+  document.getElementById('a-search').addEventListener('input', e => { searchTerm = e.target.value; applyAuditorFilters(); });
+  document.querySelectorAll('#a-filters .chip').forEach(chip => {
+    chip.addEventListener('click', () => {
+      document.querySelectorAll('#a-filters .chip').forEach(c => c.classList.remove('active'));
+      chip.classList.add('active');
+      priorityFilter = chip.dataset.p;
+      applyAuditorFilters();
+    });
+  });
+
+  // ============================================================
+  // BRAND ANALYTICS APP
+  // ============================================================
+  let brandInitialized = false;
+  function initBrandApp() {
+    if (brandInitialized) return; // jangan query ulang tiap kali auth state re-fire
+    brandInitialized = true;
+    loadKpis();
+    loadLeaderboard();
+  }
+
+  async function loadKpis() {
+    const grid = document.getElementById('kpi-grid');
+    grid.innerHTML = '<div class="kpi-card"><div class="kv">…</div><div class="kl">Memuat</div></div>';
+    try {
+      const customersCol = collection(db, 'customers');
+      const countSnap = await getCountFromServer(customersCol);
+      const totalCustomers = countSnap.data().count;
+      const aggSnap = await getAggregateFromServer(customersCol, {
+        totalSpend: sum('total_spend'), totalMargin: sum('total_margin'), avgOrders: average('total_orders'),
+      });
+      const totalSpend = aggSnap.data().totalSpend || 0;
+      const totalMargin = aggSnap.data().totalMargin || 0;
+      const avgOrders = aggSnap.data().avgOrders || 0;
+      const repeatSnap = await getCountFromServer(query(customersCol, where('total_orders', '>', 1)));
+      const repeatCount = repeatSnap.data().count;
+      const repeatRate = totalCustomers ? (repeatCount/totalCustomers*100).toFixed(1) : '0';
+
+      const cards = [
+        { v: totalCustomers.toLocaleString('id-ID'), l: 'Total Customer', s: '' },
+        { v: 'Rp'+Math.round(totalSpend).toLocaleString('id-ID'), l: 'Total Nominal (lifetime)', s: 'Akumulasi semua order yang pernah masuk' },
+        { v: 'Rp'+Math.round(totalMargin).toLocaleString('id-ID'), l: 'Total Margin (lifetime)', s: 'Cuma order dengan item ter-match SKU cost' },
+        { v: repeatRate+'%', l: 'Repeat Rate', s: repeatCount+' customer beli >1x' },
+        { v: avgOrders.toFixed(1), l: 'Rata-rata Order/Customer', s: '' },
+        { v: 'Belum bisa dihitung', l: 'Churn Rate (ringkasan)', s: 'Perlu Cloud Function terjadwal yang belum dibangun', cls: 'na' },
+      ];
+      grid.innerHTML = cards.map(c => `<div class="kpi-card ${c.cls||''}"><div class="kv">${c.v}</div><div class="kl">${c.l}</div><div class="ks">${c.s}</div></div>`).join('');
+    } catch (e) {
+      grid.innerHTML = `<div class="kpi-card na"><div class="kv">Gagal</div><div class="ks">${e.message}</div></div>`;
+    }
+  }
+
+  async function loadLeaderboard() {
+    const body = document.getElementById('leaderboard-body');
+    try {
+      const q = query(collection(db, 'customers'), orderBy('total_spend', 'desc'), limit(20));
+      const snap = await getDocs(q);
+      body.innerHTML = snap.docs.map(d => {
+        const c = d.data();
+        return `<tr><td style="text-transform:capitalize">${c.customer_name||'-'}</td><td class="mono">${c.phone_normalized||''}</td><td class="mono">Rp${Math.round(c.total_spend||0).toLocaleString('id-ID')}</td><td class="mono">${c.total_orders||0}</td></tr>`;
+      }).join('') || '<tr><td colspan="4">Belum ada data.</td></tr>';
+    } catch (e) {
+      body.innerHTML = `<tr><td colspan="4">Gagal memuat: ${e.message}</td></tr>`;
+    }
+  }
+
+  let churnMode = 'bulanan';
+  document.querySelectorAll('.churn-tabs button').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.churn-tabs button').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      churnMode = btn.dataset.mode;
+      runChurnQuery();
+    });
+  });
+  document.getElementById('b-month-picker').addEventListener('change', runChurnQuery);
+
+  async function runChurnQuery() {
+    const month = document.getElementById('b-month-picker').value;
+    const resultEl = document.getElementById('churn-result');
+    if (!month) { resultEl.innerHTML = ''; return; }
+    const field = churnMode === 'bulanan' ? 'churn_status_monthly' : 'churn_status_biasa';
+    try {
+      const q = query(collection(db, 'customers'), where(field, '==', true), where('churn_month', '==', month));
+      const snap = await getDocs(q);
+      if (snap.empty) {
+        resultEl.innerHTML = `<div class="warnbox">Tidak ada data untuk bulan ini - kemungkinan besar karena Cloud Function terjadwal yang mengisi field "${field}" belum dibangun/dijalankan, bukan berarti tidak ada customer churn.</div>`;
+        return;
+      }
+      resultEl.innerHTML = `<table class="an-table"><thead><tr><th>Customer</th><th>HP</th></tr></thead><tbody>` +
+        snap.docs.map(d => `<tr><td>${d.data().customer_name||'-'}</td><td class="mono">${d.data().phone_normalized||''}</td></tr>`).join('') + `</tbody></table>`;
+    } catch (e) {
+      resultEl.innerHTML = `<div class="warnbox">Query gagal: ${e.message} (kemungkinan butuh composite index - cek link di error console Firestore)</div>`;
+    }
+  }
+
+  document.getElementById('bulk-open-btn').addEventListener('click', () => document.getElementById('bulk-modal').classList.add('show'));
+  document.getElementById('bulk-close-btn').addEventListener('click', () => document.getElementById('bulk-modal').classList.remove('show'));
+  document.getElementById('bulk-upload-btn').addEventListener('click', async () => {
+    const fileInput = document.getElementById('bulk-file');
+    const statusEl = document.getElementById('bulk-status');
+    if (!fileInput.files[0]) { statusEl.textContent = 'Pilih file dulu.'; return; }
+    statusEl.textContent = 'Mengupload...';
+    try {
+      const file = fileInput.files[0];
+      const path = `brand-uploads/${Date.now()}_${file.name}`;
+      await uploadBytes(ref(storage, path), file);
+      statusEl.textContent = '✓ Terupload ke ' + path + '. Cloud Function memproses di background.';
+    } catch (e) {
+      statusEl.textContent = '✗ Gagal: ' + e.message;
+    }
+  });
+
+  function escapeHtml(s) { const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
+</script>
+
+<div id="login-screen">
+  <div id="login-box">
+    <div class="brand"><div class="dot"></div><h1>Audit Center</h1></div>
+    <div class="sub">Login — sistem otomatis arahkan ke Auditor App atau Brand Analytics App sesuai role akunmu</div>
+    <input type="email" id="login-email" placeholder="Email">
+    <input type="password" id="login-pass" placeholder="Password">
+    <button id="login-btn">Masuk</button>
+    <div id="login-error"></div>
+    <div id="login-note">Role (auditor/brand) ditentukan oleh custom claim di akun Firebase Auth-mu, bukan pilihan di layar ini — lihat DEPLOY_TUTORIAL.md langkah set-claim.js.</div>
+  </div>
+</div>
+
+<div id="auditor-app">
+  <div id="a-topbar">
+    <div class="title">Audit Center — Auditor</div>
+    <div class="stat urgent"><div class="n" id="stat-urgent">–</div><div class="l">Urgent</div></div>
+    <div class="stat medium"><div class="n" id="stat-medium">–</div><div class="l">Medium</div></div>
+    <div class="stat"><div class="n" id="stat-total">–</div><div class="l">Total task</div></div>
+    <div class="topbar-right"><button id="a-logout-btn">Keluar</button></div>
+  </div>
+  <div id="a-main">
+    <div id="a-sidebar">
+      <input type="text" id="a-search" placeholder="Cari nama/HP...">
+      <div id="a-filters">
+        <button class="chip active" data-p="all">Semua</button>
+        <button class="chip" data-p="Urgent">Urgent</button>
+        <button class="chip" data-p="Medium">Medium</button>
+        <button class="chip" data-p="Low">Low</button>
+      </div>
+      <div id="a-list-status">Belum ada data audit. Pastikan Cloud Function onAuditorUpload sudah pernah jalan.</div>
+      <div id="a-list"></div>
+    </div>
+    <div id="a-detail">
+      <div id="a-empty">Pilih customer di sebelah kiri</div>
+      <div id="a-detail-inner"></div>
+    </div>
+  </div>
+</div>
+
+<div id="brand-app">
+  <div id="b-topbar">
+    <div class="title">Audit Center — Analytics</div>
+    <div class="topbar-right">
+      <button id="bulk-open-btn" style="background:var(--accent);color:#fff;border-color:var(--accent);">Upload Data Historis</button>
+      <button id="b-logout-btn">Keluar</button>
+    </div>
+  </div>
+  <div id="b-body">
+    <div id="b-inner">
+      <div class="warnbox">⚠ KPI dihitung langsung dari Firestore (aggregation query), bukan cache. Churn masih kosong sampai Cloud Function terjadwal dibangun - lihat DEPLOY_TUTORIAL.md.</div>
+      <div class="kpi-grid" id="kpi-grid"></div>
+      <div class="section-title">Customer Heavy Spender (Top 20, lifetime)</div>
+      <table class="an-table"><thead><tr><th>Customer</th><th>HP</th><th>Total Belanja</th><th>Total Order</th></tr></thead><tbody id="leaderboard-body"></tbody></table>
+      <div class="section-title">Churn</div>
+      <div class="churn-tabs">
+        <button class="active" data-mode="bulanan">Churn Bulanan</button>
+        <button data-mode="biasa">Churn Biasa</button>
+      </div>
+      <input type="month" id="b-month-picker">
+      <div id="churn-result"></div>
+    </div>
+  </div>
+</div>
+
+<div id="bulk-modal">
+  <div id="bulk-box">
+    <h3>Upload Data Historis</h3>
+    <p style="font-size:12.5px;color:var(--ct-text-dim);">Format Rincian Penjualan lama. Tidak membuat task audit.</p>
+    <input type="file" id="bulk-file" accept=".csv">
+    <div>
+      <button id="bulk-upload-btn" style="background:var(--accent);color:#fff;border:none;padding:9px 18px;border-radius:6px;cursor:pointer;">Upload</button>
+      <button id="bulk-close-btn" style="background:transparent;border:1px solid var(--ct-border);padding:9px 18px;border-radius:6px;cursor:pointer;">Tutup</button>
+    </div>
+    <div id="bulk-status"></div>
+  </div>
+</div>
+
+<div id="config-warning" style="display:none;">⚠ firebaseConfig belum diisi - app ini tidak akan bisa login sampai kamu ganti placeholder di dalam kode.</div>
+
+</body>
+</html>
