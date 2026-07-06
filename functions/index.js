@@ -40,7 +40,7 @@ const HIGH_QTY_THRESHOLD = 6;
 // ============================================================
 // TRIGGER 1: Upload harian oleh Auditor (Baus format, buat task)
 // ============================================================
-exports.onAuditorUpload = functions.storage.object().onFinalize(async (object) => {
+exports.onAuditorUpload = functions.region('asia-southeast2').storage.object().onFinalize(async (object) => {
   if (!object.name.startsWith('auditor-uploads/')) return null;
 
   const [fileContents] = await bucket.file(object.name).download();
@@ -156,8 +156,7 @@ exports.onAuditorUpload = functions.storage.object().onFinalize(async (object) =
 // ============================================================
 // TRIGGER 2: Bulk seed oleh Tim Brand (format lama, TIDAK buat task)
 // ============================================================
-exports.onAuditorUpload = functions.region('asia-southeast2').storage.object().onFinalize(async (object) => {
-  if (!object.name.startsWith('brand-uploads/')) return null;
+exports.onBrandBulkUpload = functions.region('asia-southeast2').storage.object().onFinalize(async (object) => {  if (!object.name.startsWith('brand-uploads/')) return null;
 
   const [fileContents] = await bucket.file(object.name).download();
   const rows = csvParse.parse(fileContents.toString('utf8'), {
