@@ -67,3 +67,34 @@ function evaluateChurnStatus(monthlyHistory, evalMonth) {
 }
 
 module.exports = { evaluateChurnStatus };
+
+/**
+ * Bangun array bulan berurutan (tanpa bolong) dari bulan pertama customer
+ * pernah order sampai evalMonth, mengisi 0 untuk bulan yang kosong.
+ * WAJIB tidak ada bolong - evaluateChurnStatus mengasumsikan array-nya
+ * kontinu, kalau ada bulan yang hilang dari array, "bulan kosong berturut"
+ * jadi salah hitung.
+ *
+ * @param {string} firstMonthKey - format "YYYY-MM", bulan pertama ada order
+ * @param {{year:number, month:number}} evalMonth
+ * @param {Object<string, number>} countsByMonth - key "YYYY-MM" -> jumlah order
+ * @returns {Array<{year:number, month:number, order_count:number}>}
+ */
+function buildContinuousMonthlyHistory(firstMonthKey, evalMonth, countsByMonth) {
+  const [firstYear, firstMonthNum] = firstMonthKey.split('-').map(Number);
+  const history = [];
+
+  let y = firstYear;
+  let m = firstMonthNum;
+
+  while (y < evalMonth.year || (y === evalMonth.year && m <= evalMonth.month)) {
+    const key = `${y}-${String(m).padStart(2, '0')}`;
+    history.push({ year: y, month: m, order_count: countsByMonth[key] || 0 });
+    m++;
+    if (m > 12) { m = 1; y++; }
+  }
+
+  return history;
+}
+
+module.exports.buildContinuousMonthlyHistory = buildContinuousMonthlyHistory;
