@@ -265,7 +265,7 @@ exports.onBrandBulkUpload = functions.runWith({ timeoutSeconds: 540, memory: '51
 // secret ini bisa mengubah role siapa saja, jadi jangan dibagikan
 // sembarangan dan jangan dipakai sebagai secret asal-asalan.
 // ============================================================
-const ADMIN_SECRET = "GANTI_DENGAN_KATA_SANDI_RAHASIA_MILIKMU_SENDIRI";
+const ADMIN_SECRET = "Berkahdalem00";
 
 exports.setRole = functions.https.onRequest(async (req, res) => {
   const { email, role, secret } = req.query;
