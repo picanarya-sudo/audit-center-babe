@@ -126,14 +126,14 @@
   // TODO: GANTI dengan config project Firebase asli. Placeholder ini
   // sengaja dibuat gagal supaya tidak ada kesan "sudah jalan" padahal
   // belum diisi.
-const firebaseConfig = {
-  apiKey: "AIzaSyBXw1VPrusJDgwjbfkBp3J9PyVBEGqGA3U",
-  authDomain: "audit-center-babe.firebaseapp.com",
-  projectId: "audit-center-babe",
-  storageBucket: "audit-center-babe.firebasestorage.app",
-  messagingSenderId: "95941509340",
-  appId: "1:95941509340:web:8f6a3c7c0d6b0e239eb419"
-};
+  const firebaseConfig = {
+    apiKey: "GANTI_DENGAN_API_KEY_ASLI",
+    authDomain: "GANTI.firebaseapp.com",
+    projectId: "GANTI_PROJECT_ID",
+    storageBucket: "GANTI.appspot.com",
+    messagingSenderId: "GANTI",
+    appId: "GANTI",
+  };
   if (!firebaseConfig.apiKey.startsWith("GANTI")) {
     // ok, config sudah diisi
   } else {
@@ -405,7 +405,19 @@ const firebaseConfig = {
     }
   }
 
-  document.getElementById('bulk-open-btn').addEventListener('click', () => document.getElementById('bulk-modal').classList.add('show'));
+  document.getElementById('bulk-open-btn').addEventListener('click', () => openUploadModal('brand-uploads/', 'Upload Data Historis', 'Format Rincian Penjualan lama. Tidak membuat task audit.'));
+  document.getElementById('a-upload-btn').addEventListener('click', () => openUploadModal('auditor-uploads/', 'Upload Data Transaksi Harian', 'Format CSV dari Trx Baus Dashboard. Akan membuat/update task audit sesuai prioritas.'));
+
+  let currentUploadPrefix = 'auditor-uploads/';
+  function openUploadModal(prefix, title, desc) {
+    currentUploadPrefix = prefix;
+    document.getElementById('bulk-modal-title').textContent = title;
+    document.getElementById('bulk-modal-desc').textContent = desc;
+    document.getElementById('bulk-status').textContent = '';
+    document.getElementById('bulk-file').value = '';
+    document.getElementById('bulk-modal').classList.add('show');
+  }
+
   document.getElementById('bulk-close-btn').addEventListener('click', () => document.getElementById('bulk-modal').classList.remove('show'));
   document.getElementById('bulk-upload-btn').addEventListener('click', async () => {
     const fileInput = document.getElementById('bulk-file');
@@ -414,9 +426,9 @@ const firebaseConfig = {
     statusEl.textContent = 'Mengupload...';
     try {
       const file = fileInput.files[0];
-      const path = `brand-uploads/${Date.now()}_${file.name}`;
+      const path = `${currentUploadPrefix}${Date.now()}_${file.name}`;
       await uploadBytes(ref(storage, path), file);
-      statusEl.textContent = '✓ Terupload ke ' + path + '. Cloud Function memproses di background.';
+      statusEl.textContent = '✓ Terupload ke ' + path + '. Cloud Function memproses di background - refresh halaman beberapa saat lagi untuk lihat hasilnya.';
     } catch (e) {
       statusEl.textContent = '✗ Gagal: ' + e.message;
     }
@@ -443,7 +455,10 @@ const firebaseConfig = {
     <div class="stat urgent"><div class="n" id="stat-urgent">–</div><div class="l">Urgent</div></div>
     <div class="stat medium"><div class="n" id="stat-medium">–</div><div class="l">Medium</div></div>
     <div class="stat"><div class="n" id="stat-total">–</div><div class="l">Total task</div></div>
-    <div class="topbar-right"><button id="a-logout-btn">Keluar</button></div>
+    <div class="topbar-right">
+      <button id="a-upload-btn" style="background:var(--accent);color:#fff;border-color:var(--accent);">Upload Data Transaksi</button>
+      <button id="a-logout-btn">Keluar</button>
+    </div>
   </div>
   <div id="a-main">
     <div id="a-sidebar">
@@ -491,8 +506,8 @@ const firebaseConfig = {
 
 <div id="bulk-modal">
   <div id="bulk-box">
-    <h3>Upload Data Historis</h3>
-    <p style="font-size:12.5px;color:var(--ct-text-dim);">Format Rincian Penjualan lama. Tidak membuat task audit.</p>
+    <h3 id="bulk-modal-title">Upload Data</h3>
+    <p id="bulk-modal-desc" style="font-size:12.5px;color:var(--ct-text-dim);"></p>
     <input type="file" id="bulk-file" accept=".csv">
     <div>
       <button id="bulk-upload-btn" style="background:var(--accent);color:#fff;border:none;padding:9px 18px;border-radius:6px;cursor:pointer;">Upload</button>
