@@ -115,7 +115,7 @@
     getAuth, signInWithEmailAndPassword, onAuthStateChanged, signOut
   } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
   import {
-    getFirestore, collection, query, where, orderBy, limit, getDocs, doc,
+    getFirestore, collection, collectionGroup, query, where, orderBy, limit, getDocs, doc, getDoc,
     updateDoc, serverTimestamp, onSnapshot, getCountFromServer,
     getAggregateFromServer, sum, average
   } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
@@ -126,14 +126,14 @@
   // TODO: GANTI dengan config project Firebase asli. Placeholder ini
   // sengaja dibuat gagal supaya tidak ada kesan "sudah jalan" padahal
   // belum diisi.
-const firebaseConfig = {
-  apiKey: "AIzaSyBXw1VPrusJDgwjbfkBp3J9PyVBEGqGA3U",
-  authDomain: "audit-center-babe.firebaseapp.com",
-  projectId: "audit-center-babe",
-  storageBucket: "audit-center-babe.firebasestorage.app",
-  messagingSenderId: "95941509340",
-  appId: "1:95941509340:web:8f6a3c7c0d6b0e239eb419"
-};
+  const firebaseConfig = {
+    apiKey: "GANTI_DENGAN_API_KEY_ASLI",
+    authDomain: "GANTI.firebaseapp.com",
+    projectId: "GANTI_PROJECT_ID",
+    storageBucket: "GANTI.appspot.com",
+    messagingSenderId: "GANTI",
+    appId: "GANTI",
+  };
   if (!firebaseConfig.apiKey.startsWith("GANTI")) {
     // ok, config sudah diisi
   } else {
@@ -404,21 +404,81 @@ const firebaseConfig = {
   document.getElementById('b-month-picker').addEventListener('change', runChurnQuery);
 
   async function runChurnQuery() {
-    const month = document.getElementById('b-month-picker').value;
+    const month = document.getElementById('b-month-picker').value; // format "YYYY-MM"
     const resultEl = document.getElementById('churn-result');
     if (!month) { resultEl.innerHTML = ''; return; }
-    const field = churnMode === 'bulanan' ? 'churn_status_monthly' : 'churn_status_biasa';
+    const field = churnMode === 'bulanan' ? 'is_churn_bulanan' : 'is_churn_biasa';
+    resultEl.innerHTML = '<div class="warnbox">Memuat...</div>';
     try {
-      const q = query(collection(db, 'customers'), where(field, '==', true), where('churn_month', '==', month));
-      const snap = await getDocs(q);
-      if (snap.empty) {
-        resultEl.innerHTML = `<div class="warnbox">Tidak ada data untuk bulan ini - kemungkinan besar karena Cloud Function terjadwal yang mengisi field "${field}" belum dibangun/dijalankan, bukan berarti tidak ada customer churn.</div>`;
+      // Cek dulu apakah bulan ini PERNAH dievaluasi sama sekali (query
+      // tanpa filter is_churn_*), supaya bisa bedakan "belum pernah
+      // dihitung" vs "sudah dihitung, memang nol yang cocok".
+      const anyDocQuery = query(collectionGroup(db, 'churn_history'), where('year_month', '==', month), limit(1));
+      const anyDocSnap = await getDocs(anyDocQuery);
+
+      if (anyDocSnap.empty) {
+        resultEl.innerHTML = `
+          <div class="warnbox">
+            Bulan ${month} belum pernah dihitung.
+            <button id="compute-churn-btn" style="margin-left:10px;background:var(--accent);color:#fff;border:none;padding:7px 14px;border-radius:6px;cursor:pointer;">Hitung Churn Bulan Ini</button>
+          </div>`;
+        document.getElementById('compute-churn-btn').addEventListener('click', () => computeChurnForMonth(month));
         return;
       }
+
+      // collectionGroup: cari lintas SEMUA customer sekaligus, bukan cuma
+      // satu dokumen. Ini yang membuat filter bulan benar-benar bekerja -
+      // setiap bulan yang PERNAH dievaluasi tetap tersimpan sebagai
+      // dokumen terpisah, tidak saling menimpa.
+      const q = query(
+        collectionGroup(db, 'churn_history'),
+        where('year_month', '==', month),
+        where(field, '==', true)
+      );
+      const snap = await getDocs(q);
+      if (snap.empty) {
+        resultEl.innerHTML = `<div class="warnbox">Sudah dihitung untuk bulan ${month} - hasilnya nol customer yang cocok kriteria "${churnMode === 'bulanan' ? 'Churn Bulanan' : 'Churn Biasa'}". <button id="recompute-churn-btn" style="margin-left:6px;background:transparent;border:1px solid var(--ct-border);padding:5px 10px;border-radius:6px;cursor:pointer;font-size:11px;">Hitung ulang</button></div>`;
+        document.getElementById('recompute-churn-btn').addEventListener('click', () => computeChurnForMonth(month));
+        return;
+      }
+      // Ambil dokumen customer induk untuk tiap hasil (nama, HP) -
+      // subcollection churn_history sendiri tidak simpan data itu.
+      const rows = await Promise.all(snap.docs.map(async (d) => {
+        const customerRef = d.ref.parent.parent; // subcollection -> dokumen customer induk
+        const customerSnap = await getDoc(customerRef);
+        const c = customerSnap.exists() ? customerSnap.data() : {};
+        return { name: c.customer_name || '-', phone: c.phone_normalized || '' };
+      }));
       resultEl.innerHTML = `<table class="an-table"><thead><tr><th>Customer</th><th>HP</th></tr></thead><tbody>` +
-        snap.docs.map(d => `<tr><td>${d.data().customer_name||'-'}</td><td class="mono">${d.data().phone_normalized||''}</td></tr>`).join('') + `</tbody></table>`;
+        rows.map(r => `<tr><td style="text-transform:capitalize">${r.name}</td><td class="mono">${r.phone}</td></tr>`).join('') + `</tbody></table>`;
     } catch (e) {
-      resultEl.innerHTML = `<div class="warnbox">Query gagal: ${e.message} (kemungkinan butuh composite index - cek link di error console Firestore)</div>`;
+      resultEl.innerHTML = `<div class="warnbox">Query gagal: ${e.message} (kemungkinan butuh composite index untuk collectionGroup query - cek link di error console/DevTools, klik untuk auto-buat)</div>`;
+    }
+  }
+
+  // Panggil Cloud Function triggerChurnEvaluation langsung dari app, pakai
+  // token login user yang sedang aktif - tidak perlu copy-paste URL atau
+  // tahu secret apa pun. Function-nya sendiri yang verifikasi role='brand'
+  // dari token ini di sisi server.
+  async function computeChurnForMonth(month) {
+    const resultEl = document.getElementById('churn-result');
+    const [y, m] = month.split('-');
+    resultEl.innerHTML = '<div class="warnbox">Menghitung... ini bisa makan waktu beberapa menit untuk data yang besar, jangan tutup halaman ini dulu.</div>';
+    try {
+      const idToken = await auth.currentUser.getIdToken();
+      const url = `https://us-central1-${firebaseConfig.projectId}.cloudfunctions.net/triggerChurnEvaluation?year=${y}&month=${parseInt(m, 10)}`;
+      const response = await fetch(url, {
+        headers: { 'Authorization': 'Bearer ' + idToken }
+      });
+      const text = await response.text();
+      if (!response.ok) {
+        resultEl.innerHTML = `<div class="warnbox">Gagal menghitung: ${text}</div>`;
+        return;
+      }
+      resultEl.innerHTML = `<div class="warnbox">✓ Selesai dihitung. Memuat hasil...</div>`;
+      await runChurnQuery(); // langsung tampilkan hasilnya, tidak perlu ganti bulan manual lagi
+    } catch (e) {
+      resultEl.innerHTML = `<div class="warnbox">Gagal menghitung: ${e.message}</div>`;
     }
   }
 
