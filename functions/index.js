@@ -29,6 +29,7 @@ const XLSX = require('xlsx'); // baca .xlsx MAUPUN .csv - lihat catatan di bawah
 
 const { resolveCustomer } = require('./lib/phone');
 const { calculateOrderMargin, buildSkuCostMap, normalizeName } = require('./lib/margin');
+const { evaluateChurnStatus, buildContinuousMonthlyHistory } = require('./lib/churn');
 
 admin.initializeApp();
 const db = admin.firestore();
@@ -342,8 +343,116 @@ exports.onSkuUpload = functions.region('asia-southeast2').storage.object().onFin
 });
 
 // ============================================================
-// Helper: logika prioritas (dipindah dari demo HTML, belum diubah)
+// TRIGGER 4: Evaluasi Churn - BARU, sebelumnya cuma logika murni di
+// lib/churn.js, sekarang benar-benar jalan menyentuh Firestore.
+//
+// Ada DUA cara menjalankan fungsi inti yang sama:
+//   - Terjadwal otomatis tiap tanggal 2 awal bulan (evaluasi bulan yang
+//     baru saja berakhir).
+//   - Manual lewat URL (sama pola seperti setRole) - supaya bisa dites
+//     SEKARANG, tidak perlu nunggu sebulan untuk tahu apakah ini jalan.
+//
+// CATATAN SKALA: fungsi ini scan SELURUH collection `orders` tiap
+// dijalankan untuk mengelompokkan order per bulan per customer. Di skala
+// sekarang (ratusan-ribuan order) ini aman. Di skala puluhan ribu
+// customer dengan histori panjang, ini perlu dioptimasi (mis. simpan
+// agregat bulanan langsung saat ingestion, bukan scan ulang tiap kali) -
+// belum dikerjakan, catat sebagai pekerjaan lanjutan.
 // ============================================================
+async function runChurnEvaluation(evalYear, evalMonth) {
+  const ordersSnapshot = await db.collection('orders').get();
+  const monthlyCounts = {}; // { customerDocId: { "2026-04": count, ... } }
+
+  for (const doc of ordersSnapshot.docs) {
+    const order = doc.data();
+    const customerId = order.customer_doc_id;
+    if (!customerId || !order.created_at) continue;
+
+    const date = new Date(String(order.created_at).replace(' ', 'T'));
+    if (isNaN(date)) continue;
+
+    const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+    if (!monthlyCounts[customerId]) monthlyCounts[customerId] = {};
+    monthlyCounts[customerId][key] = (monthlyCounts[customerId][key] || 0) + 1;
+  }
+
+  const batch = new ChunkedBatchWriter(db);
+  let processed = 0;
+  let skipped = 0;
+
+  for (const [customerId, counts] of Object.entries(monthlyCounts)) {
+    const months = Object.keys(counts).sort();
+    const firstMonthKey = months[0];
+
+    try {
+      const history = buildContinuousMonthlyHistory(firstMonthKey, { year: evalYear, month: evalMonth }, counts);
+      const result = evaluateChurnStatus(history, { year: evalYear, month: evalMonth });
+
+      await batch.set(
+        db.collection('customers').doc(customerId),
+        {
+          churn_status_monthly: result.isChurnBulanan,
+          churn_status_biasa: result.isChurnBiasa,
+          churn_month: `${evalYear}-${String(evalMonth).padStart(2, '0')}`,
+          churn_evaluated_at: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
+      processed++;
+    } catch (e) {
+      // customer yang bulan pertamanya SETELAH evalMonth (data belum ada
+      // di bulan itu) akan gagal di sini - itu wajar, bukan error nyata.
+      skipped++;
+    }
+  }
+
+  const totalWritten = await batch.commitAll();
+  return { processed, skipped, totalWritten, evalMonth: `${evalYear}-${String(evalMonth).padStart(2, '0')}` };
+}
+
+function getPreviousMonth() {
+  const now = new Date();
+  const month = now.getMonth(); // 0-indexed; bulan SEBELUM bulan berjalan
+  if (month === 0) return { year: now.getFullYear() - 1, month: 12 };
+  return { year: now.getFullYear(), month };
+}
+
+exports.evaluateChurnMonthlyScheduled = functions
+  .runWith({ timeoutSeconds: 540, memory: '512MB' })
+  .region('asia-southeast2')
+  .pubsub.schedule('0 2 2 * *') // tanggal 2 tiap bulan, jam 2 pagi
+  .timeZone('Asia/Jakarta')
+  .onRun(async () => {
+    const { year, month } = getPreviousMonth();
+    const result = await runChurnEvaluation(year, month);
+    functions.logger.info('evaluateChurnMonthlyScheduled selesai', result);
+    return null;
+  });
+
+// Versi manual lewat browser, dilindungi ADMIN_SECRET yang sama seperti
+// setRole. Bisa kasih ?year=2026&month=6 eksplisit, atau kosongkan untuk
+// otomatis pakai bulan sebelumnya.
+exports.triggerChurnEvaluation = functions
+  .runWith({ timeoutSeconds: 540, memory: '512MB' })
+  .https.onRequest(async (req, res) => {
+    const { secret, year, month } = req.query;
+    if (secret !== ADMIN_SECRET) {
+      res.status(403).send('Forbidden - parameter secret salah atau belum diisi.');
+      return;
+    }
+
+    const evalYear = year ? parseInt(year, 10) : getPreviousMonth().year;
+    const evalMonth = month ? parseInt(month, 10) : getPreviousMonth().month;
+
+    try {
+      const result = await runChurnEvaluation(evalYear, evalMonth);
+      res.status(200).json(result);
+    } catch (e) {
+      res.status(500).send('Error: ' + e.message);
+    }
+  });
+
+
 function computePriority(row, isNewCustomer) {
   const nominal = parseFloat(row.total_nominal || 0);
   const qty = parseInt(row.total_quantity || 0, 10);
