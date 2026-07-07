@@ -82,8 +82,13 @@
 
   /* ===== Brand Analytics App ===== */
   #brand-app{display:none;flex-direction:column;height:100vh;}
-  #b-body{flex:1;overflow-y:auto;background:var(--ct-bg);}
-  #b-inner{max-width:1180px;margin:0 auto;padding:28px 36px 60px;}
+  #b-main-layout{display:flex;flex:1;min-height:0;}
+  #b-sidebar{width:260px;flex-shrink:0;background:var(--panel);border-right:1px solid var(--border);display:flex;flex-direction:column;padding:12px;gap:4px;overflow-y:auto;}
+  .b-nav-item{text-align:left;padding:11px 14px;border-radius:var(--radius);border:1px solid transparent;background:transparent;color:var(--text-dim);font-size:12.5px;font-weight:600;cursor:pointer;}
+  .b-nav-item:hover{background:var(--panel-2);color:var(--text);}
+  .b-nav-item.active{background:var(--panel-2);color:var(--text);border-color:var(--accent);}
+  #b-content{flex:1;overflow-y:auto;background:var(--ct-bg);}
+  #b-category-body{max-width:1180px;margin:0 auto;padding:28px 36px 60px;}
   .warnbox{background:var(--ct-panel);border:1px solid var(--ct-border);border-left:3px solid var(--urgent);border-radius:var(--radius);padding:14px 18px;margin-bottom:24px;font-size:12.5px;color:var(--ct-text-dim);}
   .kpi-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;margin-bottom:30px;}
   .kpi-card{background:var(--ct-panel);border:1px solid var(--ct-border);border-radius:var(--radius);padding:16px 18px;}
@@ -93,13 +98,29 @@
   .kpi-card .kl{font-size:10.5px;color:var(--ct-text-faint);text-transform:uppercase;margin-top:4px;}
   .kpi-card .ks{font-size:10.5px;color:var(--ct-text-dim);margin-top:6px;line-height:1.4;}
   .section-title{font-size:11px;font-weight:700;text-transform:uppercase;color:var(--ct-text-faint);margin:30px 0 12px;padding-bottom:8px;border-bottom:1px solid var(--ct-border);}
+  .cat-title{font-size:20px;font-weight:700;color:var(--ct-text);margin-bottom:4px;}
+  .cat-sub{font-size:12px;color:var(--ct-text-faint);margin-bottom:18px;}
   .an-table{width:100%;border-collapse:collapse;background:var(--ct-panel);border:1px solid var(--ct-border);border-radius:var(--radius);overflow:hidden;}
   .an-table th{text-align:left;font-size:10px;text-transform:uppercase;color:var(--ct-text-faint);padding:10px 14px;background:var(--ct-panel-2);border-bottom:1px solid var(--ct-border);}
   .an-table td{padding:10px 14px;font-size:12.5px;border-bottom:1px solid var(--ct-border);}
+  .an-table tr.clickable{cursor:pointer;}
+  .an-table tr.clickable:hover td{background:var(--ct-panel-2);}
   .churn-tabs{display:flex;gap:8px;margin-bottom:14px;}
   .churn-tabs button{padding:7px 16px;border-radius:20px;border:1px solid var(--ct-border);background:var(--ct-panel);color:var(--ct-text-dim);font-size:12px;font-weight:600;cursor:pointer;}
   .churn-tabs button.active{background:var(--accent);color:#fff;border-color:var(--accent);}
   #b-month-picker{padding:7px 10px;border-radius:var(--radius);border:1px solid var(--ct-border);background:var(--ct-panel);}
+  .date-filter-row{display:flex;gap:10px;align-items:center;margin-bottom:20px;flex-wrap:wrap;}
+  .date-filter-row input[type=date]{padding:7px 10px;border-radius:var(--radius);border:1px solid var(--ct-border);background:var(--ct-panel);}
+  .date-filter-row button{padding:8px 16px;border-radius:var(--radius);border:none;background:var(--accent);color:#fff;font-weight:600;cursor:pointer;font-size:12px;}
+  .dl-btn{padding:7px 14px;border-radius:var(--radius);border:1px solid var(--ct-border);background:var(--ct-panel);color:var(--ct-text-dim);font-size:11.5px;cursor:pointer;margin-bottom:14px;}
+  .bar-row{display:flex;align-items:center;gap:10px;margin-bottom:6px;}
+  .bar-label{width:90px;font-size:11px;color:var(--ct-text-dim);flex-shrink:0;}
+  .bar-track{flex:1;height:18px;background:var(--ct-panel-2);border-radius:4px;overflow:hidden;border:1px solid var(--ct-border);}
+  .bar-fill{height:100%;background:var(--accent);}
+  .bar-value{width:40px;text-align:right;font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--ct-text-dim);}
+  #detail-drawer{position:fixed;top:0;right:0;bottom:0;width:420px;background:var(--ct-panel);border-left:1px solid var(--ct-border);box-shadow:-4px 0 20px rgba(0,0,0,0.15);z-index:60;display:none;overflow-y:auto;padding:24px;}
+  #detail-drawer.show{display:block;}
+  #detail-drawer-close{background:transparent;border:1px solid var(--ct-border);border-radius:var(--radius);padding:5px 10px;cursor:pointer;float:right;}
   #bulk-modal{position:fixed;inset:0;background:rgba(20,18,14,0.55);display:none;align-items:center;justify-content:center;z-index:50;}
   #bulk-modal.show{display:flex;}
   #bulk-box{background:var(--ct-panel);border-radius:10px;padding:26px;max-width:480px;width:90%;}
@@ -320,14 +341,101 @@ const firebaseConfig = {
   });
 
   // ============================================================
-  // BRAND ANALYTICS APP
+  // BRAND ANALYTICS APP - navigasi sidebar per kategori
   // ============================================================
   let brandInitialized = false;
+  let activeCategory = 'ringkasan';
+
   function initBrandApp() {
     if (brandInitialized) return; // jangan query ulang tiap kali auth state re-fire
     brandInitialized = true;
-    loadKpis();
-    loadLeaderboard();
+    document.querySelectorAll('.b-nav-item').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.b-nav-item').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        activeCategory = btn.dataset.cat;
+        renderCategory(activeCategory);
+      });
+    });
+    renderCategory('ringkasan');
+  }
+
+  function renderCategory(cat) {
+    const body = document.getElementById('b-category-body');
+    body.innerHTML = '<div class="warnbox">Memuat...</div>';
+    const map = {
+      ringkasan: renderRingkasan,
+      churn: renderChurnCategory,
+      loyal: renderLoyalCategory,
+      otb: renderOtbCategory,
+      acquisition: renderAcquisitionCategory,
+      website: renderWebsiteCategory,
+      performance: renderPerformanceCategory,
+      bad_experience: renderBadExperienceCategory,
+    };
+    (map[cat] || renderRingkasan)(body);
+  }
+
+  // ===== Helper bersama =====
+  function defaultDateRange() {
+    const to = new Date();
+    const from = new Date(to.getTime() - 29 * 24 * 60 * 60 * 1000);
+    const fmt = (d) => d.toISOString().slice(0, 10);
+    return { from: fmt(from), to: fmt(to) };
+  }
+
+  function monthsBetween(fromYm, toYm) {
+    const months = [];
+    let [y, m] = fromYm.split('-').map(Number);
+    const [toY, toM] = toYm.split('-').map(Number);
+    while (y < toY || (y === toY && m <= toM)) {
+      months.push(`${y}-${String(m).padStart(2, '0')}`);
+      m++;
+      if (m > 12) { m = 1; y++; }
+    }
+    return months;
+  }
+
+  function dateFilterHtml(fromId, toId, applyId, defaultFrom, defaultTo) {
+    return `<div class="date-filter-row">
+      <input type="date" id="${fromId}" value="${defaultFrom}">
+      <span style="color:var(--ct-text-faint)">s/d</span>
+      <input type="date" id="${toId}" value="${defaultTo}">
+      <button id="${applyId}">Terapkan</button>
+    </div>`;
+  }
+
+  function downloadCsv(filename, rows) {
+    if (!rows || rows.length === 0) return;
+    const headers = Object.keys(rows[0]);
+    const csvLines = [headers.join(',')];
+    rows.forEach(r => {
+      csvLines.push(headers.map(h => {
+        let v = r[h] ?? '';
+        v = String(v).replace(/"/g, '""');
+        if (v.includes(',') || v.includes('"') || v.includes('\n')) v = `"${v}"`;
+        return v;
+      }).join(','));
+    });
+    const blob = new Blob(['\uFEFF' + csvLines.join('\n')], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  // ===== Ringkasan (KPI + leaderboard, sudah ada sebelumnya) =====
+  async function renderRingkasan(body) {
+    body.innerHTML = `
+      <div class="cat-title">Ringkasan</div>
+      <div class="warnbox">KPI dihitung langsung dari Firestore (aggregation query), bukan cache.</div>
+      <div class="kpi-grid" id="kpi-grid"></div>
+      <div class="section-title">Customer Heavy Spender (Top 20, lifetime)</div>
+      <table class="an-table"><thead><tr><th>Customer</th><th>HP</th><th>Total Belanja</th><th>Total Order</th></tr></thead><tbody id="leaderboard-body"></tbody></table>
+    `;
+    await loadKpis();
+    await loadLeaderboard();
   }
 
   async function loadKpis() {
@@ -349,15 +457,7 @@ const firebaseConfig = {
       const avgOrdersPerCustomer = aggSnap.data().avgOrdersPerCustomer || 0;
       const repeatSnap = await getCountFromServer(query(customersCol, where('total_orders', '>', 1)));
       const repeatCount = repeatSnap.data().count;
-      const repeatRate = totalCustomers ? (repeatCount/totalCustomers*100).toFixed(1) : '0';
-
-      // Metrik yang diminta di requirement awal (#8 Performance Customer):
-      // rata-rata sales/margin PER TRANSAKSI, dan CLV (margin per customer
-      // sampai dia churn). Dua yang pertama bisa dihitung solid sekarang.
-      // CLV murni ("sampai churn") belum bisa tepat karena butuh tahu siapa
-      // yang SUDAH churn - masih tergantung Cloud Function terjadwal yang
-      // belum dibangun. Yang ditampilkan di bawah proxy: rata-rata margin
-      // per customer SEJAUH INI (bukan "sampai churn" yang sesungguhnya).
+      const repeatRate = totalCustomers ? (repeatCount / totalCustomers * 100).toFixed(1) : '0';
       const avgSalesPerOrder = totalOrdersSum ? totalSpend / totalOrdersSum : 0;
       const avgMarginPerOrder = totalOrdersSum ? totalMargin / totalOrdersSum : 0;
       const avgMarginPerCustomerProxy = totalCustomers ? totalMargin / totalCustomers : 0;
@@ -367,10 +467,9 @@ const firebaseConfig = {
         { v: 'Rp'+Math.round(totalSpend).toLocaleString('id-ID'), l: 'Total Revenue (Perusahaan, Lifetime)', s: 'Akumulasi semua customer - angka perusahaan, bukan per-customer' },
         { v: 'Rp'+Math.round(avgSalesPerOrder).toLocaleString('id-ID'), l: 'Rata-rata Sales / Transaksi', s: '' },
         { v: 'Rp'+Math.round(avgMarginPerOrder).toLocaleString('id-ID'), l: 'Rata-rata Margin / Transaksi', s: 'Cuma order dengan item ter-match SKU cost' },
-        { v: 'Rp'+Math.round(avgMarginPerCustomerProxy).toLocaleString('id-ID'), l: 'Rata-rata Margin/Customer (Proxy CLV)', s: 'BUKAN CLV sesungguhnya - itu perlu tahu siapa yang sudah churn (belum bisa). Ini rata-rata margin per customer sejauh ini.', cls: 'na' },
+        { v: 'Rp'+Math.round(avgMarginPerCustomerProxy).toLocaleString('id-ID'), l: 'Rata-rata Margin/Customer (Proxy CLV)', s: 'BUKAN CLV sesungguhnya - itu perlu tahu siapa yang sudah churn.', cls: 'na' },
         { v: repeatRate+'%', l: 'Repeat Rate', s: repeatCount+' customer beli >1x' },
         { v: avgOrdersPerCustomer.toFixed(1), l: 'Rata-rata Order/Customer', s: '' },
-        { v: 'Belum bisa dihitung', l: 'Churn Rate (ringkasan)', s: 'Perlu Cloud Function terjadwal yang belum dibangun', cls: 'na' },
       ];
       grid.innerHTML = cards.map(c => `<div class="kpi-card ${c.cls||''}"><div class="kv">${c.v}</div><div class="kl">${c.l}</div><div class="ks">${c.s}</div></div>`).join('');
     } catch (e) {
@@ -392,94 +491,389 @@ const firebaseConfig = {
     }
   }
 
-  let churnMode = 'bulanan';
-  document.querySelectorAll('.churn-tabs button').forEach(btn => {
-    btn.addEventListener('click', () => {
-      document.querySelectorAll('.churn-tabs button').forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
-      churnMode = btn.dataset.mode;
-      runChurnQuery();
+  // ===== 1. Data Customer Churn =====
+  function renderChurnCategory(body) {
+    body.innerHTML = `
+      <div class="cat-title">Data Customer Churn</div>
+      <div class="cat-sub">Definisi tidak berubah: 2 bulan kosong berturut (Churn Bulanan) atau pernah beli ≥2x lalu berhenti (Churn Biasa). Rata-rata margin/transaksi di bawah ini dihitung lifetime (bukan dibatasi bulan yang dipilih).</div>
+      <div class="churn-tabs">
+        <button class="active" data-mode="bulanan">Churn Bulanan</button>
+        <button data-mode="biasa">Churn Biasa</button>
+      </div>
+      <input type="month" id="b-month-picker">
+      <div id="churn-result" style="margin-top:14px;"></div>
+    `;
+    let churnMode = 'bulanan';
+    body.querySelectorAll('.churn-tabs button').forEach(btn => {
+      btn.addEventListener('click', () => {
+        body.querySelectorAll('.churn-tabs button').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        churnMode = btn.dataset.mode;
+        runChurnQueryV2(churnMode);
+      });
     });
-  });
-  document.getElementById('b-month-picker').addEventListener('change', runChurnQuery);
+    body.querySelector('#b-month-picker').addEventListener('change', () => runChurnQueryV2(churnMode));
+  }
 
-  async function runChurnQuery() {
-    const month = document.getElementById('b-month-picker').value; // format "YYYY-MM"
+  async function runChurnQueryV2(churnMode) {
+    const month = document.getElementById('b-month-picker').value;
     const resultEl = document.getElementById('churn-result');
     if (!month) { resultEl.innerHTML = ''; return; }
     const field = churnMode === 'bulanan' ? 'is_churn_bulanan' : 'is_churn_biasa';
     resultEl.innerHTML = '<div class="warnbox">Memuat...</div>';
     try {
-      // Cek dulu apakah bulan ini PERNAH dievaluasi sama sekali (query
-      // tanpa filter is_churn_*), supaya bisa bedakan "belum pernah
-      // dihitung" vs "sudah dihitung, memang nol yang cocok".
       const anyDocQuery = query(collectionGroup(db, 'churn_history'), where('year_month', '==', month), limit(1));
       const anyDocSnap = await getDocs(anyDocQuery);
-
       if (anyDocSnap.empty) {
-        resultEl.innerHTML = `
-          <div class="warnbox">
-            Bulan ${month} belum pernah dihitung.
-            <button id="compute-churn-btn" style="margin-left:10px;background:var(--accent);color:#fff;border:none;padding:7px 14px;border-radius:6px;cursor:pointer;">Hitung Churn Bulan Ini</button>
-          </div>`;
-        document.getElementById('compute-churn-btn').addEventListener('click', () => computeChurnForMonth(month));
+        resultEl.innerHTML = `<div class="warnbox">Bulan ${month} belum pernah dihitung. <button id="compute-churn-btn" style="margin-left:10px;background:var(--accent);color:#fff;border:none;padding:7px 14px;border-radius:6px;cursor:pointer;">Hitung Churn Bulan Ini</button></div>`;
+        document.getElementById('compute-churn-btn').addEventListener('click', () => computeChurnForMonth(month, churnMode));
         return;
       }
-
-      // collectionGroup: cari lintas SEMUA customer sekaligus, bukan cuma
-      // satu dokumen. Ini yang membuat filter bulan benar-benar bekerja -
-      // setiap bulan yang PERNAH dievaluasi tetap tersimpan sebagai
-      // dokumen terpisah, tidak saling menimpa.
-      const q = query(
-        collectionGroup(db, 'churn_history'),
-        where('year_month', '==', month),
-        where(field, '==', true)
-      );
+      const q = query(collectionGroup(db, 'churn_history'), where('year_month', '==', month), where(field, '==', true));
       const snap = await getDocs(q);
       if (snap.empty) {
-        resultEl.innerHTML = `<div class="warnbox">Sudah dihitung untuk bulan ${month} - hasilnya nol customer yang cocok kriteria "${churnMode === 'bulanan' ? 'Churn Bulanan' : 'Churn Biasa'}". <button id="recompute-churn-btn" style="margin-left:6px;background:transparent;border:1px solid var(--ct-border);padding:5px 10px;border-radius:6px;cursor:pointer;font-size:11px;">Hitung ulang</button></div>`;
-        document.getElementById('recompute-churn-btn').addEventListener('click', () => computeChurnForMonth(month));
+        resultEl.innerHTML = `<div class="warnbox">Sudah dihitung untuk bulan ${month} - nol customer cocok kriteria. <button id="recompute-churn-btn" style="margin-left:6px;background:transparent;border:1px solid var(--ct-border);padding:5px 10px;border-radius:6px;cursor:pointer;font-size:11px;">Hitung ulang</button></div>`;
+        document.getElementById('recompute-churn-btn').addEventListener('click', () => computeChurnForMonth(month, churnMode));
         return;
       }
-      // Ambil dokumen customer induk untuk tiap hasil (nama, HP) -
-      // subcollection churn_history sendiri tidak simpan data itu.
       const rows = await Promise.all(snap.docs.map(async (d) => {
-        const customerRef = d.ref.parent.parent; // subcollection -> dokumen customer induk
-        const customerSnap = await getDoc(customerRef);
+        const customerSnap = await getDoc(d.ref.parent.parent);
         const c = customerSnap.exists() ? customerSnap.data() : {};
-        return { name: c.customer_name || '-', phone: c.phone_normalized || '' };
+        const avgMargin = c.total_orders ? (c.total_margin || 0) / c.total_orders : 0;
+        return {
+          'Nama Customer': c.customer_name || '-',
+          'No HP': c.phone_normalized || '',
+          'Tanggal Terakhir Beli': c.last_order_at || '',
+          'Rata-rata Margin per Transaksi': Math.round(avgMargin),
+        };
       }));
-      resultEl.innerHTML = `<table class="an-table"><thead><tr><th>Customer</th><th>HP</th></tr></thead><tbody>` +
-        rows.map(r => `<tr><td style="text-transform:capitalize">${r.name}</td><td class="mono">${r.phone}</td></tr>`).join('') + `</tbody></table>`;
+      resultEl.innerHTML = `
+        <button class="dl-btn" id="dl-churn-btn">⬇ Download CSV</button>
+        <table class="an-table"><thead><tr><th>Nama</th><th>HP</th><th>Terakhir Beli</th><th>Avg Margin/Transaksi</th></tr></thead><tbody>
+        ${rows.map(r => `<tr><td style="text-transform:capitalize">${r['Nama Customer']}</td><td class="mono">${r['No HP']}</td><td class="mono">${r['Tanggal Terakhir Beli']}</td><td class="mono">Rp${r['Rata-rata Margin per Transaksi'].toLocaleString('id-ID')}</td></tr>`).join('')}
+        </tbody></table>`;
+      document.getElementById('dl-churn-btn').addEventListener('click', () => downloadCsv(`churn_${churnMode}_${month}.csv`, rows));
     } catch (e) {
-      resultEl.innerHTML = `<div class="warnbox">Query gagal: ${e.message} (kemungkinan butuh composite index untuk collectionGroup query - cek link di error console/DevTools, klik untuk auto-buat)</div>`;
+      resultEl.innerHTML = `<div class="warnbox">Query gagal: ${e.message} (kemungkinan butuh composite index - cek link di error console/DevTools)</div>`;
     }
   }
 
-  // Panggil Cloud Function triggerChurnEvaluation langsung dari app, pakai
-  // token login user yang sedang aktif - tidak perlu copy-paste URL atau
-  // tahu secret apa pun. Function-nya sendiri yang verifikasi role='brand'
-  // dari token ini di sisi server.
-  async function computeChurnForMonth(month) {
+  async function computeChurnForMonth(month, churnMode) {
     const resultEl = document.getElementById('churn-result');
     const [y, m] = month.split('-');
     resultEl.innerHTML = '<div class="warnbox">Menghitung... ini bisa makan waktu beberapa menit untuk data yang besar, jangan tutup halaman ini dulu.</div>';
     try {
       const idToken = await auth.currentUser.getIdToken();
       const url = `https://us-central1-${firebaseConfig.projectId}.cloudfunctions.net/triggerChurnEvaluation?year=${y}&month=${parseInt(m, 10)}`;
-      const response = await fetch(url, {
-        headers: { 'Authorization': 'Bearer ' + idToken }
-      });
+      const response = await fetch(url, { headers: { 'Authorization': 'Bearer ' + idToken } });
       const text = await response.text();
       if (!response.ok) {
         resultEl.innerHTML = `<div class="warnbox">Gagal menghitung: ${text}</div>`;
         return;
       }
-      resultEl.innerHTML = `<div class="warnbox">✓ Selesai dihitung. Memuat hasil...</div>`;
-      await runChurnQuery(); // langsung tampilkan hasilnya, tidak perlu ganti bulan manual lagi
+      await runChurnQueryV2(churnMode);
     } catch (e) {
       resultEl.innerHTML = `<div class="warnbox">Gagal menghitung: ${e.message}</div>`;
     }
+  }
+
+  // ===== 2. Data Customer Loyal =====
+  function renderLoyalCategory(body) {
+    const { from, to } = defaultDateRange();
+    body.innerHTML = `
+      <div class="cat-title">Data Customer Loyal</div>
+      <div class="cat-sub">Loyal = margin ≥Rp600rb ATAU ≥5x transaksi DALAM SATU BULAN yang sama. Satu customer bisa muncul lebih dari sekali kalau loyal di beberapa bulan berbeda dalam rentang ini. Bulan yang belum pernah dihitung lewat "Data Customer Churn" tidak akan muncul di sini - hitung dulu di kategori itu.</div>
+      ${dateFilterHtml('loyal-from', 'loyal-to', 'loyal-apply', from, to)}
+      <div id="loyal-result"></div>
+    `;
+    document.getElementById('loyal-apply').addEventListener('click', runLoyalQuery);
+    runLoyalQuery();
+  }
+
+  async function runLoyalQuery() {
+    const from = document.getElementById('loyal-from').value;
+    const to = document.getElementById('loyal-to').value;
+    const resultEl = document.getElementById('loyal-result');
+    if (!from || !to) { resultEl.innerHTML = ''; return; }
+    resultEl.innerHTML = '<div class="warnbox">Memuat...</div>';
+    const months = monthsBetween(from.slice(0, 7), to.slice(0, 7)).slice(0, 30);
+    try {
+      const qHigh = query(collectionGroup(db, 'churn_history'), where('year_month', 'in', months), where('is_loyal_high_margin', '==', true));
+      const qCount = query(collectionGroup(db, 'churn_history'), where('year_month', 'in', months), where('is_loyal_high_count', '==', true));
+      const [snapHigh, snapCount] = await Promise.all([getDocs(qHigh), getDocs(qCount)]);
+      const rows = [];
+      for (const d of [...snapHigh.docs, ...snapCount.docs]) {
+        const data = d.data();
+        const customerSnap = await getDoc(d.ref.parent.parent);
+        const c = customerSnap.exists() ? customerSnap.data() : {};
+        rows.push({
+          'Bulan': data.year_month,
+          'Tipe': data.is_loyal_high_margin ? 'High Margin' : 'High Count',
+          'Nama': c.customer_name || '-',
+          'No HP': c.phone_normalized || '',
+          'Total Margin Bulan Ini': Math.round(data.margin_sum_this_month || 0),
+          'Jumlah Transaksi Bulan Ini': data.order_count_this_month || 0,
+        });
+      }
+      if (rows.length === 0) {
+        resultEl.innerHTML = `<div class="warnbox">Tidak ada hasil untuk rentang ini - kemungkinan bulan-bulan di rentang ini belum pernah dihitung lewat "Data Customer Churn", atau memang tidak ada yang loyal.</div>`;
+        return;
+      }
+      resultEl.innerHTML = `
+        <button class="dl-btn" id="dl-loyal-btn">⬇ Download CSV</button>
+        <table class="an-table"><thead><tr><th>Bulan</th><th>Tipe</th><th>Nama</th><th>HP</th><th>Total Margin</th><th>Jml Transaksi</th></tr></thead><tbody>
+        ${rows.map(r => `<tr><td class="mono">${r['Bulan']}</td><td>${r['Tipe']}</td><td style="text-transform:capitalize">${r['Nama']}</td><td class="mono">${r['No HP']}</td><td class="mono">Rp${r['Total Margin Bulan Ini'].toLocaleString('id-ID')}</td><td class="mono">${r['Jumlah Transaksi Bulan Ini']}</td></tr>`).join('')}
+        </tbody></table>`;
+      document.getElementById('dl-loyal-btn').addEventListener('click', () => downloadCsv('customer_loyal.csv', rows));
+    } catch (e) {
+      resultEl.innerHTML = `<div class="warnbox">Query gagal: ${e.message} (kemungkinan butuh composite index baru - cek DevTools console untuk link auto-buat)</div>`;
+    }
+  }
+
+  // ===== 3. Data One Time Buyer =====
+  function renderOtbCategory(body) {
+    const { from, to } = defaultDateRange();
+    body.innerHTML = `
+      <div class="cat-title">Data One Time Buyer</div>
+      <div class="cat-sub">Customer yang baru order tepat 1x seumur hidup, dikelompokkan berdasar margin dari transaksi tunggal itu.</div>
+      ${dateFilterHtml('otb-from', 'otb-to', 'otb-apply', from, to)}
+      <div id="otb-result"></div>
+    `;
+    document.getElementById('otb-apply').addEventListener('click', runOtbQuery);
+    runOtbQuery();
+  }
+
+  async function runOtbQuery() {
+    const from = document.getElementById('otb-from').value;
+    const to = document.getElementById('otb-to').value + ' 23:59:59';
+    const resultEl = document.getElementById('otb-result');
+    resultEl.innerHTML = '<div class="warnbox">Memuat...</div>';
+    try {
+      const q = query(collection(db, 'customers'), where('total_orders', '==', 1));
+      const snap = await getDocs(q);
+      const rows = snap.docs.map(d => d.data())
+        .filter(c => c.last_order_at && c.last_order_at >= from && c.last_order_at <= to)
+        .map(c => ({
+          'Nama': c.customer_name || '-',
+          'No HP': c.phone_normalized || '',
+          'Tanggal Beli': c.last_order_at,
+          'Margin': Math.round(c.total_margin || 0),
+          'Kategori': (c.total_margin || 0) > 80000 ? 'High' : 'Under',
+        }));
+      if (rows.length === 0) { resultEl.innerHTML = '<div class="warnbox">Tidak ada one-time-buyer di periode ini.</div>'; return; }
+      const high = rows.filter(r => r['Kategori'] === 'High');
+      const under = rows.filter(r => r['Kategori'] === 'Under');
+      const rowHtml = (list) => list.map(r => `<tr><td style="text-transform:capitalize">${r['Nama']}</td><td class="mono">${r['No HP']}</td><td class="mono">${r['Tanggal Beli']}</td><td class="mono">Rp${r['Margin'].toLocaleString('id-ID')}</td></tr>`).join('');
+      resultEl.innerHTML = `
+        <button class="dl-btn" id="dl-otb-btn">⬇ Download CSV</button>
+        <div class="section-title">High (margin > Rp80rb) - ${high.length} customer</div>
+        <table class="an-table"><thead><tr><th>Nama</th><th>HP</th><th>Tanggal</th><th>Margin</th></tr></thead><tbody>${rowHtml(high)}</tbody></table>
+        <div class="section-title">Under (margin ≤ Rp80rb) - ${under.length} customer</div>
+        <table class="an-table"><thead><tr><th>Nama</th><th>HP</th><th>Tanggal</th><th>Margin</th></tr></thead><tbody>${rowHtml(under)}</tbody></table>`;
+      document.getElementById('dl-otb-btn').addEventListener('click', () => downloadCsv('one_time_buyer.csv', rows));
+    } catch (e) {
+      resultEl.innerHTML = `<div class="warnbox">Query gagal: ${e.message}</div>`;
+    }
+  }
+
+  // ===== 4. Data Akuisisi Customer Baru =====
+  function renderAcquisitionCategory(body) {
+    const { from, to } = defaultDateRange();
+    body.innerHTML = `
+      <div class="cat-title">Data Akuisisi Customer Baru</div>
+      <div class="cat-sub">Berdasar tanggal order PERTAMA tiap customer. Field ini baru mulai akurat sejak fitur ini dibangun - untuk customer lama, hitung ulang lewat tombol di "Data Customer Churn" supaya first_order_at ikut ter-backfill.</div>
+      ${dateFilterHtml('acq-from', 'acq-to', 'acq-apply', from, to)}
+      <div class="section-title">Customer Baru per Tanggal</div>
+      <div id="acq-chart"></div>
+      <div id="acq-result"></div>
+    `;
+    document.getElementById('acq-apply').addEventListener('click', runAcquisitionQuery);
+    runAcquisitionQuery();
+  }
+
+  async function runAcquisitionQuery() {
+    const from = document.getElementById('acq-from').value;
+    const to = document.getElementById('acq-to').value + ' 23:59:59';
+    const resultEl = document.getElementById('acq-result');
+    const chartEl = document.getElementById('acq-chart');
+    resultEl.innerHTML = '<div class="warnbox">Memuat...</div>';
+    try {
+      const q = query(collection(db, 'customers'), where('first_order_at', '>=', from), where('first_order_at', '<=', to), orderBy('first_order_at'));
+      const snap = await getDocs(q);
+      const rows = snap.docs.map(d => {
+        const c = d.data();
+        return { 'Nama': c.customer_name || '-', 'No HP': c.phone_normalized || '', 'Tanggal Pertama Beli': c.first_order_at };
+      });
+      const perDate = {};
+      rows.forEach(r => {
+        const dateOnly = String(r['Tanggal Pertama Beli']).slice(0, 10);
+        perDate[dateOnly] = (perDate[dateOnly] || 0) + 1;
+      });
+      const maxCount = Math.max(1, ...Object.values(perDate));
+      chartEl.innerHTML = Object.keys(perDate).sort().map(d => `
+        <div class="bar-row"><div class="bar-label">${d}</div><div class="bar-track"><div class="bar-fill" style="width:${(perDate[d]/maxCount*100).toFixed(0)}%"></div></div><div class="bar-value">${perDate[d]}</div></div>
+      `).join('') || '<div class="warnbox">Tidak ada data untuk grafik.</div>';
+
+      if (rows.length === 0) { resultEl.innerHTML = '<div class="warnbox">Tidak ada customer baru di periode ini.</div>'; return; }
+      resultEl.innerHTML = `
+        <button class="dl-btn" id="dl-acq-btn">⬇ Download CSV</button>
+        <table class="an-table"><thead><tr><th>Nama</th><th>HP</th><th>Tanggal Pertama Beli</th></tr></thead><tbody>
+        ${rows.map(r => `<tr><td style="text-transform:capitalize">${r['Nama']}</td><td class="mono">${r['No HP']}</td><td class="mono">${r['Tanggal Pertama Beli']}</td></tr>`).join('')}
+        </tbody></table>`;
+      document.getElementById('dl-acq-btn').addEventListener('click', () => downloadCsv('akuisisi_customer_baru.csv', rows));
+    } catch (e) {
+      resultEl.innerHTML = `<div class="warnbox">Query gagal: ${e.message} (kemungkinan butuh composite index baru untuk field first_order_at - cek DevTools console)</div>`;
+    }
+  }
+
+  // ===== 5. Data Customer Website =====
+  function renderWebsiteCategory(body) {
+    const { from, to } = defaultDateRange();
+    body.innerHTML = `
+      <div class="cat-title">Data Customer Website</div>
+      <div class="cat-sub">Patokan: metode bayar QRIS WEB (satu-satunya metode bayar di web, sesuai keputusan bisnis). Order yang diupload SEBELUM fitur ini ditambahkan tidak punya data metode bayar tersimpan - hasil di bawah cuma mencakup upload setelahnya.</div>
+      ${dateFilterHtml('web-from', 'web-to', 'web-apply', from, to)}
+      <div id="web-result"></div>
+    `;
+    document.getElementById('web-apply').addEventListener('click', runWebsiteQuery);
+    runWebsiteQuery();
+  }
+
+  async function runWebsiteQuery() {
+    const from = document.getElementById('web-from').value;
+    const to = document.getElementById('web-to').value + ' 23:59:59';
+    const resultEl = document.getElementById('web-result');
+    resultEl.innerHTML = '<div class="warnbox">Memuat...</div>';
+    try {
+      const q = query(collection(db, 'orders'), where('is_web_channel', '==', true), where('created_at', '>=', from), where('created_at', '<=', to));
+      const snap = await getDocs(q);
+      const customerIds = new Set();
+      snap.docs.forEach(d => customerIds.add(d.data().customer_doc_id));
+      resultEl.innerHTML = `<div class="kpi-grid">
+        <div class="kpi-card"><div class="kv">${snap.size}</div><div class="kl">Total Order via Website</div></div>
+        <div class="kpi-card"><div class="kv">${customerIds.size}</div><div class="kl">Customer Unik</div></div>
+      </div>`;
+    } catch (e) {
+      resultEl.innerHTML = `<div class="warnbox">Query gagal: ${e.message} (kemungkinan butuh composite index baru)</div>`;
+    }
+  }
+
+  // ===== 6. Data Customer Performance =====
+  function renderPerformanceCategory(body) {
+    const { from, to } = defaultDateRange();
+    body.innerHTML = `
+      <div class="cat-title">Data Customer Performance</div>
+      <div class="cat-sub">Rata-rata sales & margin per transaksi, dihitung dari order dalam periode yang dipilih (bukan lifetime).</div>
+      ${dateFilterHtml('perf-from', 'perf-to', 'perf-apply', from, to)}
+      <div id="perf-result"></div>
+    `;
+    document.getElementById('perf-apply').addEventListener('click', runPerformanceQuery);
+    runPerformanceQuery();
+  }
+
+  async function runPerformanceQuery() {
+    const from = document.getElementById('perf-from').value;
+    const to = document.getElementById('perf-to').value + ' 23:59:59';
+    const resultEl = document.getElementById('perf-result');
+    resultEl.innerHTML = '<div class="warnbox">Memuat...</div>';
+    try {
+      const q = query(collection(db, 'orders'), where('created_at', '>=', from), where('created_at', '<=', to));
+      const countSnap = await getCountFromServer(q);
+      const aggSnap = await getAggregateFromServer(q, { totalNominal: sum('total_nominal'), totalMargin: sum('margin') });
+      const count = countSnap.data().count;
+      const totalNominal = aggSnap.data().totalNominal || 0;
+      const totalMargin = aggSnap.data().totalMargin || 0;
+      resultEl.innerHTML = `<div class="kpi-grid">
+        <div class="kpi-card"><div class="kv">${count}</div><div class="kl">Total Transaksi</div></div>
+        <div class="kpi-card"><div class="kv">Rp${Math.round(count ? totalNominal/count : 0).toLocaleString('id-ID')}</div><div class="kl">Rata-rata Sales/Transaksi</div></div>
+        <div class="kpi-card"><div class="kv">Rp${Math.round(count ? totalMargin/count : 0).toLocaleString('id-ID')}</div><div class="kl">Rata-rata Margin/Transaksi</div></div>
+      </div>`;
+    } catch (e) {
+      resultEl.innerHTML = `<div class="warnbox">Query gagal: ${e.message} (kemungkinan butuh composite index baru)</div>`;
+    }
+  }
+
+  // ===== 7. Data Customer Bad Experience =====
+  function renderBadExperienceCategory(body) {
+    body.innerHTML = `
+      <div class="cat-title">Data Customer Bad Experience</div>
+      <div class="cat-sub">Berdasar hasil isian auditor (Telat Bales / Salah Barang). Klik baris untuk lihat detail audit lengkap.</div>
+      <div id="bad-result"><div class="warnbox">Memuat...</div></div>
+    `;
+    runBadExperienceQuery();
+  }
+
+  async function runBadExperienceQuery() {
+    const resultEl = document.getElementById('bad-result');
+    try {
+      const qBales = query(collection(db, 'audits'), where('telat_bales', '==', 'yes'));
+      const qBarang = query(collection(db, 'audits'), where('salah_barang', '==', 'yes'));
+      const [snapBales, snapBarang] = await Promise.all([getDocs(qBales), getDocs(qBarang)]);
+      const merged = new Map();
+      [...snapBales.docs, ...snapBarang.docs].forEach(d => merged.set(d.id, d));
+      if (merged.size === 0) { resultEl.innerHTML = '<div class="warnbox">Tidak ada data bad experience tersimpan dari audit.</div>'; return; }
+
+      const rows = await Promise.all([...merged.values()].map(async (d) => {
+        const audit = d.data();
+        let c = {};
+        try {
+          const customerSnap = await getDoc(doc(db, 'customers', audit.customer_doc_id));
+          c = customerSnap.exists() ? customerSnap.data() : {};
+        } catch (e) {}
+        const avgMargin = c.total_orders ? (c.total_margin || 0) / c.total_orders : 0;
+        return {
+          id: d.id,
+          name: c.customer_name || audit.customer_name || '-',
+          phone: c.phone_normalized || audit.customer_phone || '',
+          totalOrders: c.total_orders || 0,
+          avgMargin: Math.round(avgMargin),
+          telatBales: audit.telat_bales === 'yes',
+          salahBarang: audit.salah_barang === 'yes',
+          alasanCancel: audit.alasan_cancel || '',
+          summaryRespons: audit.summary_respons || '',
+        };
+      }));
+
+      resultEl.innerHTML = `
+        <table class="an-table"><thead><tr><th>Nama</th><th>HP</th><th>Total Transaksi</th><th>Avg Margin</th><th>Masalah</th></tr></thead><tbody>
+        ${rows.map(r => `<tr class="clickable" data-id="${r.id}">
+          <td style="text-transform:capitalize">${r.name}</td>
+          <td class="mono">${r.phone}</td>
+          <td class="mono">${r.totalOrders}</td>
+          <td class="mono">Rp${r.avgMargin.toLocaleString('id-ID')}</td>
+          <td>${[r.telatBales?'Telat Bales':'', r.salahBarang?'Salah Barang':''].filter(Boolean).join(', ')}</td>
+        </tr>`).join('')}
+        </tbody></table>`;
+
+      resultEl.querySelectorAll('tr.clickable').forEach(tr => {
+        tr.addEventListener('click', () => {
+          const r = rows.find(x => x.id === tr.dataset.id);
+          showDetailDrawer(r);
+        });
+      });
+    } catch (e) {
+      resultEl.innerHTML = `<div class="warnbox">Query gagal: ${e.message}</div>`;
+    }
+  }
+
+  function showDetailDrawer(r) {
+    let drawer = document.getElementById('detail-drawer');
+    if (!drawer) {
+      drawer = document.createElement('div');
+      drawer.id = 'detail-drawer';
+      document.body.appendChild(drawer);
+    }
+    drawer.innerHTML = `
+      <button id="detail-drawer-close">Tutup</button>
+      <h3 style="text-transform:capitalize;margin-top:30px;">${r.name}</h3>
+      <div class="mono" style="color:var(--ct-text-dim);margin-bottom:16px;">${r.phone}</div>
+      <div class="section-title">Alasan Cancel</div>
+      <div>${r.alasanCancel || '(kosong)'}</div>
+      <div class="section-title">Summary Respons Customer</div>
+      <div>${r.summaryRespons || '(kosong)'}</div>
+    `;
+    drawer.classList.add('show');
+    document.getElementById('detail-drawer-close').addEventListener('click', () => drawer.classList.remove('show'));
   }
 
   document.getElementById('bulk-open-btn').addEventListener('click', () => openUploadModal('brand-uploads/', 'Upload Data Historis', 'Format Rincian Penjualan lama (.xlsx atau .csv). Tidak membuat task audit.'));
@@ -566,19 +960,19 @@ const firebaseConfig = {
       <button id="b-logout-btn">Keluar</button>
     </div>
   </div>
-  <div id="b-body">
-    <div id="b-inner">
-      <div class="warnbox">⚠ KPI dihitung langsung dari Firestore (aggregation query), bukan cache. Churn masih kosong sampai Cloud Function terjadwal dibangun - lihat DEPLOY_TUTORIAL.md.</div>
-      <div class="kpi-grid" id="kpi-grid"></div>
-      <div class="section-title">Customer Heavy Spender (Top 20, lifetime)</div>
-      <table class="an-table"><thead><tr><th>Customer</th><th>HP</th><th>Total Belanja</th><th>Total Order</th></tr></thead><tbody id="leaderboard-body"></tbody></table>
-      <div class="section-title">Churn</div>
-      <div class="churn-tabs">
-        <button class="active" data-mode="bulanan">Churn Bulanan</button>
-        <button data-mode="biasa">Churn Biasa</button>
-      </div>
-      <input type="month" id="b-month-picker">
-      <div id="churn-result"></div>
+  <div id="b-main-layout">
+    <div id="b-sidebar">
+      <button class="b-nav-item active" data-cat="ringkasan">Ringkasan</button>
+      <button class="b-nav-item" data-cat="churn">Data Customer Churn</button>
+      <button class="b-nav-item" data-cat="loyal">Data Customer Loyal</button>
+      <button class="b-nav-item" data-cat="otb">Data One Time Buyer</button>
+      <button class="b-nav-item" data-cat="acquisition">Data Akuisisi Customer Baru</button>
+      <button class="b-nav-item" data-cat="website">Data Customer Website</button>
+      <button class="b-nav-item" data-cat="performance">Data Customer Performance</button>
+      <button class="b-nav-item" data-cat="bad_experience">Data Customer Bad Experience</button>
+    </div>
+    <div id="b-content">
+      <div id="b-category-body"></div>
     </div>
   </div>
 </div>
