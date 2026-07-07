@@ -126,7 +126,7 @@
   // TODO: GANTI dengan config project Firebase asli. Placeholder ini
   // sengaja dibuat gagal supaya tidak ada kesan "sudah jalan" padahal
   // belum diisi.
-const firebaseConfig = {
+ const firebaseConfig = {
   apiKey: "AIzaSyBXw1VPrusJDgwjbfkBp3J9PyVBEGqGA3U",
   authDomain: "audit-center-babe.firebaseapp.com",
   projectId: "audit-center-babe",
@@ -338,21 +338,38 @@ const firebaseConfig = {
       const countSnap = await getCountFromServer(customersCol);
       const totalCustomers = countSnap.data().count;
       const aggSnap = await getAggregateFromServer(customersCol, {
-        totalSpend: sum('total_spend'), totalMargin: sum('total_margin'), avgOrders: average('total_orders'),
+        totalSpend: sum('total_spend'),
+        totalMargin: sum('total_margin'),
+        totalOrdersSum: sum('total_orders'),
+        avgOrdersPerCustomer: average('total_orders'),
       });
       const totalSpend = aggSnap.data().totalSpend || 0;
       const totalMargin = aggSnap.data().totalMargin || 0;
-      const avgOrders = aggSnap.data().avgOrders || 0;
+      const totalOrdersSum = aggSnap.data().totalOrdersSum || 0;
+      const avgOrdersPerCustomer = aggSnap.data().avgOrdersPerCustomer || 0;
       const repeatSnap = await getCountFromServer(query(customersCol, where('total_orders', '>', 1)));
       const repeatCount = repeatSnap.data().count;
       const repeatRate = totalCustomers ? (repeatCount/totalCustomers*100).toFixed(1) : '0';
 
+      // Metrik yang diminta di requirement awal (#8 Performance Customer):
+      // rata-rata sales/margin PER TRANSAKSI, dan CLV (margin per customer
+      // sampai dia churn). Dua yang pertama bisa dihitung solid sekarang.
+      // CLV murni ("sampai churn") belum bisa tepat karena butuh tahu siapa
+      // yang SUDAH churn - masih tergantung Cloud Function terjadwal yang
+      // belum dibangun. Yang ditampilkan di bawah proxy: rata-rata margin
+      // per customer SEJAUH INI (bukan "sampai churn" yang sesungguhnya).
+      const avgSalesPerOrder = totalOrdersSum ? totalSpend / totalOrdersSum : 0;
+      const avgMarginPerOrder = totalOrdersSum ? totalMargin / totalOrdersSum : 0;
+      const avgMarginPerCustomerProxy = totalCustomers ? totalMargin / totalCustomers : 0;
+
       const cards = [
         { v: totalCustomers.toLocaleString('id-ID'), l: 'Total Customer', s: '' },
-        { v: 'Rp'+Math.round(totalSpend).toLocaleString('id-ID'), l: 'Total Nominal (lifetime)', s: 'Akumulasi semua order yang pernah masuk' },
-        { v: 'Rp'+Math.round(totalMargin).toLocaleString('id-ID'), l: 'Total Margin (lifetime)', s: 'Cuma order dengan item ter-match SKU cost' },
+        { v: 'Rp'+Math.round(totalSpend).toLocaleString('id-ID'), l: 'Total Revenue (Perusahaan, Lifetime)', s: 'Akumulasi semua customer - angka perusahaan, bukan per-customer' },
+        { v: 'Rp'+Math.round(avgSalesPerOrder).toLocaleString('id-ID'), l: 'Rata-rata Sales / Transaksi', s: '' },
+        { v: 'Rp'+Math.round(avgMarginPerOrder).toLocaleString('id-ID'), l: 'Rata-rata Margin / Transaksi', s: 'Cuma order dengan item ter-match SKU cost' },
+        { v: 'Rp'+Math.round(avgMarginPerCustomerProxy).toLocaleString('id-ID'), l: 'Rata-rata Margin/Customer (Proxy CLV)', s: 'BUKAN CLV sesungguhnya - itu perlu tahu siapa yang sudah churn (belum bisa). Ini rata-rata margin per customer sejauh ini.', cls: 'na' },
         { v: repeatRate+'%', l: 'Repeat Rate', s: repeatCount+' customer beli >1x' },
-        { v: avgOrders.toFixed(1), l: 'Rata-rata Order/Customer', s: '' },
+        { v: avgOrdersPerCustomer.toFixed(1), l: 'Rata-rata Order/Customer', s: '' },
         { v: 'Belum bisa dihitung', l: 'Churn Rate (ringkasan)', s: 'Perlu Cloud Function terjadwal yang belum dibangun', cls: 'na' },
       ];
       grid.innerHTML = cards.map(c => `<div class="kpi-card ${c.cls||''}"><div class="kv">${c.v}</div><div class="kl">${c.l}</div><div class="ks">${c.s}</div></div>`).join('');
@@ -405,8 +422,9 @@ const firebaseConfig = {
     }
   }
 
-  document.getElementById('bulk-open-btn').addEventListener('click', () => openUploadModal('brand-uploads/', 'Upload Data Historis', 'Format Rincian Penjualan lama. Tidak membuat task audit.'));
-  document.getElementById('a-upload-btn').addEventListener('click', () => openUploadModal('auditor-uploads/', 'Upload Data Transaksi Harian', 'Format CSV dari Trx Baus Dashboard. Akan membuat/update task audit sesuai prioritas.'));
+  document.getElementById('bulk-open-btn').addEventListener('click', () => openUploadModal('brand-uploads/', 'Upload Data Historis', 'Format Rincian Penjualan lama (.xlsx atau .csv). Tidak membuat task audit.'));
+  document.getElementById('sku-open-btn').addEventListener('click', () => openUploadModal('sku-uploads/', 'Upload/Update SKU Cost', 'Format product master (.xlsx/.csv), kolom "name" dan "buy_price". Data lama akan di-update (merge), bukan dihapus dulu.'));
+  document.getElementById('a-upload-btn').addEventListener('click', () => openUploadModal('auditor-uploads/', 'Upload Data Transaksi Harian', 'Format CSV/xlsx dari Trx Baus Dashboard. Akan membuat/update task audit sesuai prioritas.'));
 
   let currentUploadPrefix = 'auditor-uploads/';
   function openUploadModal(prefix, title, desc) {
@@ -483,6 +501,7 @@ const firebaseConfig = {
   <div id="b-topbar">
     <div class="title">Audit Center — Analytics</div>
     <div class="topbar-right">
+      <button id="sku-open-btn" style="background:transparent;border:1px solid var(--accent);color:var(--accent);">Upload/Update SKU Cost</button>
       <button id="bulk-open-btn" style="background:var(--accent);color:#fff;border-color:var(--accent);">Upload Data Historis</button>
       <button id="b-logout-btn">Keluar</button>
     </div>
@@ -508,7 +527,7 @@ const firebaseConfig = {
   <div id="bulk-box">
     <h3 id="bulk-modal-title">Upload Data</h3>
     <p id="bulk-modal-desc" style="font-size:12.5px;color:var(--ct-text-dim);"></p>
-    <input type="file" id="bulk-file" accept=".csv">
+    <input type="file" id="bulk-file" accept=".csv,.xlsx,.xls">
     <div>
       <button id="bulk-upload-btn" style="background:var(--accent);color:#fff;border:none;padding:9px 18px;border-radius:6px;cursor:pointer;">Upload</button>
       <button id="bulk-close-btn" style="background:transparent;border:1px solid var(--ct-border);padding:9px 18px;border-radius:6px;cursor:pointer;">Tutup</button>
