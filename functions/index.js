@@ -138,6 +138,10 @@ exports.onAuditorUpload = functions.runWith({ timeoutSeconds: 540, memory: '512M
         margin: marginResult.margin,
         margin_is_partial: marginResult.isPartial, // true = ada item belum matched, review manual
         is_late_arrival: row.is_late_arrival === 'true',
+        payment_method_name: row.payment_method_name || null,
+        // QRIS WEB = satu-satunya metode bayar di web (keputusan bisnis
+        // yang sudah dikonfirmasi) - dipakai untuk kategori Customer Website.
+        is_web_channel: row.payment_method_name === 'QRIS WEB',
         created_at: row.created_at,
         source_upload: object.name,
         ingested_at: admin.firestore.FieldValue.serverTimestamp(),
@@ -362,6 +366,9 @@ exports.onSkuUpload = functions.region('asia-southeast2').storage.object().onFin
 async function runChurnEvaluation(evalYear, evalMonth) {
   const ordersSnapshot = await db.collection('orders').get();
   const monthlyCounts = {}; // { customerDocId: { "2026-04": count, ... } }
+  const monthlyMargin = {}; // { customerDocId: { "2026-04": sum margin, ... } }
+  const monthlyNominal = {}; // { customerDocId: { "2026-04": sum nominal, ... } }
+  const firstOrderDate = {}; // { customerDocId: earliest created_at string }
 
   for (const doc of ordersSnapshot.docs) {
     const order = doc.data();
@@ -373,7 +380,18 @@ async function runChurnEvaluation(evalYear, evalMonth) {
 
     const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
     if (!monthlyCounts[customerId]) monthlyCounts[customerId] = {};
+    if (!monthlyMargin[customerId]) monthlyMargin[customerId] = {};
+    if (!monthlyNominal[customerId]) monthlyNominal[customerId] = {};
+
     monthlyCounts[customerId][key] = (monthlyCounts[customerId][key] || 0) + 1;
+    monthlyMargin[customerId][key] = (monthlyMargin[customerId][key] || 0) + (order.margin || 0);
+    monthlyNominal[customerId][key] = (monthlyNominal[customerId][key] || 0) + (order.total_nominal || 0);
+
+    // first_order_at: dihitung ulang tiap kali fungsi ini jalan (idempotent,
+    // aman diulang) - dipakai untuk kategori Akuisisi Customer Baru.
+    if (!firstOrderDate[customerId] || order.created_at < firstOrderDate[customerId]) {
+      firstOrderDate[customerId] = order.created_at;
+    }
   }
 
   const batch = new ChunkedBatchWriter(db);
@@ -386,6 +404,15 @@ async function runChurnEvaluation(evalYear, evalMonth) {
     const months = Object.keys(counts).sort();
     const firstMonthKey = months[0];
 
+    // first_order_at ditulis ke dokumen customer langsung (fakta lifetime,
+    // bukan per bulan) - dilakukan untuk SEMUA customer tiap fungsi ini
+    // jalan, terlepas dari apakah mereka aktif di evalMonth atau tidak.
+    await batch.set(
+      db.collection('customers').doc(customerId),
+      { first_order_at: firstOrderDate[customerId] },
+      { merge: true }
+    );
+
     try {
       const history = buildContinuousMonthlyHistory(firstMonthKey, { year: evalYear, month: evalMonth }, counts);
       const result = evaluateChurnStatus(history, { year: evalYear, month: evalMonth });
@@ -394,6 +421,8 @@ async function runChurnEvaluation(evalYear, evalMonth) {
       // menimpa satu field di dokumen customer. Ini yang memungkinkan
       // filter bulan di UI benar-benar bekerja tanpa perlu re-trigger -
       // begitu satu bulan pernah dihitung, hasilnya tetap ada selamanya.
+      // Sekalian simpan margin_sum & order_count BULAN INI SAJA (bukan
+      // lifetime) - dipakai untuk kategori Loyal Customer & One Time Buyer.
       await batch.set(
         db.collection('customers').doc(customerId).collection('churn_history').doc(yearMonthKey),
         {
@@ -401,6 +430,11 @@ async function runChurnEvaluation(evalYear, evalMonth) {
           is_churn_bulanan: result.isChurnBulanan,
           is_churn_biasa: result.isChurnBiasa,
           lifetime_orders_at_eval: result.lifetimeOrders,
+          margin_sum_this_month: monthlyMargin[customerId][yearMonthKey] || 0,
+          nominal_sum_this_month: monthlyNominal[customerId][yearMonthKey] || 0,
+          order_count_this_month: counts[yearMonthKey] || 0,
+          is_loyal_high_margin: (monthlyMargin[customerId][yearMonthKey] || 0) >= 600000,
+          is_loyal_high_count: (counts[yearMonthKey] || 0) >= 5,
           evaluated_at: admin.firestore.FieldValue.serverTimestamp(),
         },
         { merge: true }
