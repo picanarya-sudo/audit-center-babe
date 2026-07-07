@@ -265,7 +265,7 @@ exports.onBrandBulkUpload = functions.runWith({ timeoutSeconds: 540, memory: '51
 // secret ini bisa mengubah role siapa saja, jadi jangan dibagikan
 // sembarangan dan jangan dipakai sebagai secret asal-asalan.
 // ============================================================
-const ADMIN_SECRET = "Berkahdalem00";
+const ADMIN_SECRET = "GANTI_DENGAN_KATA_SANDI_RAHASIA_MILIKMU_SENDIRI";
 
 exports.setRole = functions.https.onRequest(async (req, res) => {
   const { email, role, secret } = req.query;
@@ -380,6 +380,8 @@ async function runChurnEvaluation(evalYear, evalMonth) {
   let processed = 0;
   let skipped = 0;
 
+  const yearMonthKey = `${evalYear}-${String(evalMonth).padStart(2, '0')}`;
+
   for (const [customerId, counts] of Object.entries(monthlyCounts)) {
     const months = Object.keys(counts).sort();
     const firstMonthKey = months[0];
@@ -388,13 +390,18 @@ async function runChurnEvaluation(evalYear, evalMonth) {
       const history = buildContinuousMonthlyHistory(firstMonthKey, { year: evalYear, month: evalMonth }, counts);
       const result = evaluateChurnStatus(history, { year: evalYear, month: evalMonth });
 
+      // Simpan sebagai dokumen TERPISAH per bulan (subcollection), BUKAN
+      // menimpa satu field di dokumen customer. Ini yang memungkinkan
+      // filter bulan di UI benar-benar bekerja tanpa perlu re-trigger -
+      // begitu satu bulan pernah dihitung, hasilnya tetap ada selamanya.
       await batch.set(
-        db.collection('customers').doc(customerId),
+        db.collection('customers').doc(customerId).collection('churn_history').doc(yearMonthKey),
         {
-          churn_status_monthly: result.isChurnBulanan,
-          churn_status_biasa: result.isChurnBiasa,
-          churn_month: `${evalYear}-${String(evalMonth).padStart(2, '0')}`,
-          churn_evaluated_at: admin.firestore.FieldValue.serverTimestamp(),
+          year_month: yearMonthKey,
+          is_churn_bulanan: result.isChurnBulanan,
+          is_churn_biasa: result.isChurnBiasa,
+          lifetime_orders_at_eval: result.lifetimeOrders,
+          evaluated_at: admin.firestore.FieldValue.serverTimestamp(),
         },
         { merge: true }
       );
@@ -407,7 +414,7 @@ async function runChurnEvaluation(evalYear, evalMonth) {
   }
 
   const totalWritten = await batch.commitAll();
-  return { processed, skipped, totalWritten, evalMonth: `${evalYear}-${String(evalMonth).padStart(2, '0')}` };
+  return { processed, skipped, totalWritten, evalMonth: yearMonthKey };
 }
 
 function getPreviousMonth() {
@@ -429,18 +436,43 @@ exports.evaluateChurnMonthlyScheduled = functions
     return null;
   });
 
-// Versi manual lewat browser, dilindungi ADMIN_SECRET yang sama seperti
-// setRole. Bisa kasih ?year=2026&month=6 eksplisit, atau kosongkan untuk
-// otomatis pakai bulan sebelumnya.
+// Dipanggil dari tombol di Brand App - verifikasi pakai Firebase Auth ID
+// token (bukan lagi secret di URL). Tim brand tinggal klik tombol setelah
+// login, tidak perlu tahu password rahasia atau edit URL apa pun.
+// setRole di atas TETAP pakai ADMIN_SECRET karena itu dipakai SEBELUM ada
+// user dengan role apa pun (masalah ayam-telur: butuh role untuk verifikasi
+// role, jadi harus ada jalur bootstrap terpisah).
 exports.triggerChurnEvaluation = functions
   .runWith({ timeoutSeconds: 540, memory: '512MB' })
   .https.onRequest(async (req, res) => {
-    const { secret, year, month } = req.query;
-    if (secret !== ADMIN_SECRET) {
-      res.status(403).send('Forbidden - parameter secret salah atau belum diisi.');
+    res.set('Access-Control-Allow-Origin', '*');
+    res.set('Access-Control-Allow-Headers', 'Authorization, Content-Type');
+    if (req.method === 'OPTIONS') {
+      res.status(204).send('');
       return;
     }
 
+    const authHeader = req.headers.authorization || '';
+    const idToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+    if (!idToken) {
+      res.status(401).send('Unauthorized - tidak ada token login. Fungsi ini harus dipanggil dari dalam app setelah login sebagai brand, bukan dibuka langsung di browser.');
+      return;
+    }
+
+    let decodedToken;
+    try {
+      decodedToken = await admin.auth().verifyIdToken(idToken);
+    } catch (e) {
+      res.status(401).send('Token tidak valid atau kadaluarsa: ' + e.message);
+      return;
+    }
+
+    if (decodedToken.role !== 'brand') {
+      res.status(403).send('Forbidden - akun ini bukan role brand.');
+      return;
+    }
+
+    const { year, month } = req.query;
     const evalYear = year ? parseInt(year, 10) : getPreviousMonth().year;
     const evalMonth = month ? parseInt(month, 10) : getPreviousMonth().month;
 
