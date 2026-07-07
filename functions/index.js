@@ -54,7 +54,42 @@ async function readSpreadsheetFromStorage(fileName) {
 // ============================================================
 // TRIGGER 1: Upload harian oleh Auditor (Baus format, buat task)
 // ============================================================
-exports.onAuditorUpload = functions.region('asia-southeast2').storage.object().onFinalize(async (object) => {
+/**
+ * Firestore membatasi maksimal 500 operasi per batch write. File besar
+ * (ratusan/ribuan baris x 2 dokumen per baris) gampang melebihi ini kalau
+ * ditulis dalam satu batch - begitu limitnya kelewat, SELURUH batch gagal,
+ * bukan cuma sebagian. Helper ini mengumpulkan operasi lalu commit
+ * bertahap tiap `chunkSize` operasi, supaya file besar tidak gagal total.
+ */
+class ChunkedBatchWriter {
+  constructor(db, chunkSize = 400) {
+    this.db = db;
+    this.chunkSize = chunkSize;
+    this.currentBatch = db.batch();
+    this.opsInCurrentBatch = 0;
+    this.totalOpsCommitted = 0;
+  }
+  async set(ref, data, options) {
+    this.currentBatch.set(ref, data, options);
+    this.opsInCurrentBatch++;
+    if (this.opsInCurrentBatch >= this.chunkSize) {
+      await this.currentBatch.commit();
+      this.totalOpsCommitted += this.opsInCurrentBatch;
+      this.currentBatch = this.db.batch();
+      this.opsInCurrentBatch = 0;
+    }
+  }
+  async commitAll() {
+    if (this.opsInCurrentBatch > 0) {
+      await this.currentBatch.commit();
+      this.totalOpsCommitted += this.opsInCurrentBatch;
+      this.opsInCurrentBatch = 0;
+    }
+    return this.totalOpsCommitted;
+  }
+}
+
+exports.onAuditorUpload = functions.runWith({ timeoutSeconds: 540, memory: '512MB' }).region('asia-southeast2').storage.object().onFinalize(async (object) => {
   if (!object.name.startsWith('auditor-uploads/')) return null;
 
   const rows = await readSpreadsheetFromStorage(object.name);
@@ -64,7 +99,7 @@ exports.onAuditorUpload = functions.region('asia-southeast2').storage.object().o
   const skuRows = skuSnapshot.docs.map((d) => d.data());
   const skuCostMap = buildSkuCostMap(skuRows);
 
-  const batch = db.batch();
+  const batch = new ChunkedBatchWriter(db);
   let processedCount = 0;
   let newCustomerCount = 0;
   let needsReviewCount = 0;
@@ -89,7 +124,7 @@ exports.onAuditorUpload = functions.region('asia-southeast2').storage.object().o
 
     // upsert order by order_no -> idempotent, aman untuk CSV yang tumpang tindih
     const orderRef = db.collection('orders').doc(row.order_no);
-    batch.set(
+    await batch.set(
       orderRef,
       {
         order_no: row.order_no,
@@ -109,7 +144,7 @@ exports.onAuditorUpload = functions.region('asia-southeast2').storage.object().o
       { merge: true }
     );
 
-    batch.set(
+    await batch.set(
       customerRef,
       {
         phone_normalized: resolution.phoneKey,
@@ -129,7 +164,7 @@ exports.onAuditorUpload = functions.region('asia-southeast2').storage.object().o
     const priority = computePriority(row, resolution.status === 'new');
     if (priority !== 'low_no_task_needed_skip') {
       const auditRef = db.collection('audits').doc(customerDocId);
-      batch.set(
+      await batch.set(
         auditRef,
         {
           customer_doc_id: customerDocId,
@@ -151,7 +186,7 @@ exports.onAuditorUpload = functions.region('asia-southeast2').storage.object().o
     processedCount++;
   }
 
-  await batch.commit();
+  await batch.commitAll();
 
   functions.logger.info('onAuditorUpload selesai', {
     file: object.name,
@@ -166,12 +201,12 @@ exports.onAuditorUpload = functions.region('asia-southeast2').storage.object().o
 // ============================================================
 // TRIGGER 2: Bulk seed oleh Tim Brand (format lama, TIDAK buat task)
 // ============================================================
-exports.onBrandBulkUpload = functions.region('asia-southeast2').storage.object().onFinalize(async (object) => {
+exports.onBrandBulkUpload = functions.runWith({ timeoutSeconds: 540, memory: '512MB' }).region('asia-southeast2').storage.object().onFinalize(async (object) => {
   if (!object.name.startsWith('brand-uploads/')) return null;
 
   const rows = await readSpreadsheetFromStorage(object.name);
 
-  const batch = db.batch();
+  const batch = new ChunkedBatchWriter(db);
 
   for (const row of rows) {
     // format lama sudah punya margin langsung, TIDAK perlu matching SKU
@@ -179,7 +214,7 @@ exports.onBrandBulkUpload = functions.region('asia-southeast2').storage.object()
     const customerDocId = resolution.existingDocId || resolution.phoneKey;
 
     const orderRef = db.collection('orders').doc(row['order no']);
-    batch.set(
+    await batch.set(
       orderRef,
       {
         order_no: row['order no'],
@@ -195,7 +230,7 @@ exports.onBrandBulkUpload = functions.region('asia-southeast2').storage.object()
       { merge: true }
     );
 
-    batch.set(
+    await batch.set(
       db.collection('customers').doc(customerDocId),
       {
         phone_normalized: resolution.phoneKey,
@@ -212,7 +247,7 @@ exports.onBrandBulkUpload = functions.region('asia-southeast2').storage.object()
     // sesuai permintaan: bulk seed brand tidak boleh membuat task auditor.
   }
 
-  await batch.commit();
+  await batch.commitAll();
   functions.logger.info('onBrandBulkUpload selesai (seed historis, tanpa task audit)', {
     file: object.name,
     rowCount: rows.length,
@@ -265,7 +300,7 @@ exports.onSkuUpload = functions.region('asia-southeast2').storage.object().onFin
   if (!object.name.startsWith('sku-uploads/')) return null;
 
   const rows = await readSpreadsheetFromStorage(object.name);
-  const batch = db.batch();
+  const batch = new ChunkedBatchWriter(db);
   let count = 0;
   let skippedNoName = 0;
 
@@ -281,7 +316,7 @@ exports.onSkuUpload = functions.region('asia-southeast2').storage.object().onFin
     // doc ID aman dari nama produk (huruf/angka saja, sisanya jadi underscore)
     const docId = normalizeName(itemName).replace(/[^a-z0-9]+/g, '_').slice(0, 140);
 
-    batch.set(
+    await batch.set(
       db.collection('sku_costs').doc(docId),
       {
         item_name: itemName,
@@ -296,7 +331,7 @@ exports.onSkuUpload = functions.region('asia-southeast2').storage.object().onFin
     count++;
   }
 
-  await batch.commit();
+  await batch.commitAll();
   functions.logger.info('onSkuUpload selesai', {
     file: object.name,
     count,
