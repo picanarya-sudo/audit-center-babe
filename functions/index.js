@@ -25,10 +25,10 @@
 
 const functions = require('firebase-functions');
 const admin = require('firebase-admin');
-const csvParse = require('csv-parse/sync'); // npm install csv-parse
+const XLSX = require('xlsx'); // baca .xlsx MAUPUN .csv - lihat catatan di bawah
 
 const { resolveCustomer } = require('./lib/phone');
-const { calculateOrderMargin, buildSkuCostMap } = require('./lib/margin');
+const { calculateOrderMargin, buildSkuCostMap, normalizeName } = require('./lib/margin');
 
 admin.initializeApp();
 const db = admin.firestore();
@@ -37,17 +37,27 @@ const bucket = admin.storage().bucket();
 const HIGH_MARGIN_THRESHOLD = 250000; // proxy lama, GANTI ke margin asli begitu skuCostMap terisi penuh
 const HIGH_QTY_THRESHOLD = 6;
 
+/**
+ * Baca file (xlsx ATAU csv) dari Storage jadi array of objects.
+ * Kenapa ganti dari csv-parse ke library xlsx: data historis dan SKU cost
+ * yang kamu punya nyatanya berbentuk .xlsx (export Excel), bukan .csv murni.
+ * csv-parse tidak bisa baca binary Excel sama sekali - kemungkinan besar
+ * itu penyebab data historis "hilang" padahal file sukses ter-upload.
+ */
+async function readSpreadsheetFromStorage(fileName) {
+  const [fileContents] = await bucket.file(fileName).download();
+  const workbook = XLSX.read(fileContents, { type: 'buffer' });
+  const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+  return XLSX.utils.sheet_to_json(firstSheet, { defval: '' });
+}
+
 // ============================================================
 // TRIGGER 1: Upload harian oleh Auditor (Baus format, buat task)
 // ============================================================
 exports.onAuditorUpload = functions.region('asia-southeast2').storage.object().onFinalize(async (object) => {
   if (!object.name.startsWith('auditor-uploads/')) return null;
 
-  const [fileContents] = await bucket.file(object.name).download();
-  const rows = csvParse.parse(fileContents.toString('utf8'), {
-    columns: true,
-    skip_empty_lines: true,
-  });
+  const rows = await readSpreadsheetFromStorage(object.name);
 
   // muat SKU cost map (perlu di-cache di production, jangan query tiap invocation)
   const skuSnapshot = await db.collection('sku_costs').get();
@@ -156,13 +166,10 @@ exports.onAuditorUpload = functions.region('asia-southeast2').storage.object().o
 // ============================================================
 // TRIGGER 2: Bulk seed oleh Tim Brand (format lama, TIDAK buat task)
 // ============================================================
-exports.onBrandBulkUpload = functions.region('asia-southeast2').storage.object().onFinalize(async (object) => {  if (!object.name.startsWith('brand-uploads/')) return null;
+exports.onBrandBulkUpload = functions.region('asia-southeast2').storage.object().onFinalize(async (object) => {
+  if (!object.name.startsWith('brand-uploads/')) return null;
 
-  const [fileContents] = await bucket.file(object.name).download();
-  const rows = csvParse.parse(fileContents.toString('utf8'), {
-    columns: true,
-    skip_empty_lines: true,
-  });
+  const rows = await readSpreadsheetFromStorage(object.name);
 
   const batch = db.batch();
 
@@ -222,7 +229,7 @@ exports.onBrandBulkUpload = functions.region('asia-southeast2').storage.object()
 // secret ini bisa mengubah role siapa saja, jadi jangan dibagikan
 // sembarangan dan jangan dipakai sebagai secret asal-asalan.
 // ============================================================
-const ADMIN_SECRET = "Berkahdalem00";
+const ADMIN_SECRET = "GANTI_DENGAN_KATA_SANDI_RAHASIA_MILIKMU_SENDIRI";
 
 exports.setRole = functions.https.onRequest(async (req, res) => {
   const { email, role, secret } = req.query;
@@ -245,6 +252,58 @@ exports.setRole = functions.https.onRequest(async (req, res) => {
   } catch (e) {
     res.status(500).send('Error: ' + e.message + ' (pastikan user sudah dibuat dulu di Authentication > Users)');
   }
+});
+
+// ============================================================
+// TRIGGER 3: Upload/update SKU cost oleh Tim Brand (BARU - sebelumnya
+// cuma ditandai "belum ada" di README, sekarang dibangun).
+// Path: sku-uploads/{filename}. Terima kolom "name"/"item_name" dan
+// "buy_price"/"unit_cost" - cocok dengan format export product master
+// (mis. file product-1_1000...xlsx yang sudah kamu pakai).
+// ============================================================
+exports.onSkuUpload = functions.region('asia-southeast2').storage.object().onFinalize(async (object) => {
+  if (!object.name.startsWith('sku-uploads/')) return null;
+
+  const rows = await readSpreadsheetFromStorage(object.name);
+  const batch = db.batch();
+  let count = 0;
+  let skippedNoName = 0;
+
+  for (const row of rows) {
+    const itemName = row.name || row.item_name;
+    const unitCost = parseFloat(row.buy_price || row.unit_cost || 0);
+
+    if (!itemName) {
+      skippedNoName++;
+      continue;
+    }
+
+    // doc ID aman dari nama produk (huruf/angka saja, sisanya jadi underscore)
+    const docId = normalizeName(itemName).replace(/[^a-z0-9]+/g, '_').slice(0, 140);
+
+    batch.set(
+      db.collection('sku_costs').doc(docId),
+      {
+        item_name: itemName,
+        unit_cost: unitCost,
+        sku_code: row.sku || row.barcode || null,
+        category: row.category || null,
+        source_upload: object.name,
+        updated_at: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+    count++;
+  }
+
+  await batch.commit();
+  functions.logger.info('onSkuUpload selesai', {
+    file: object.name,
+    count,
+    skippedNoName, // kalau ini besar, kemungkinan nama kolom di file tidak cocok - cek log
+  });
+
+  return null;
 });
 
 // ============================================================
