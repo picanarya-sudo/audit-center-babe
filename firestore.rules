@@ -50,10 +50,10 @@ match /customers/{customerId} {
     // audits (task queue): HANYA auditor boleh baca & tulis (isi form audit).
     // Brand TIDAK BOLEH menyentuh ini sama sekali - baik baca maupun tulis -
     // supaya tidak bisa mengubah status audit secara tidak sengaja atau sengaja.
-    match /audits/{customerId} {
-      allow read: if isAuditor();
-      allow write: if isAuditor();
-    }
+match /audits/{customerId} {
+  allow read: if isAuditor() || isBrand();
+  allow write: if isAuditor();
+}
 
     // sku_costs: brand boleh baca (referensi), tulis cuma via Cloud Function
     // (dipicu bulk-upload CSV, bukan tulis langsung dari client).
