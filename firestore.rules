@@ -37,7 +37,7 @@ match /customers/{customerId} {
       allow write: if false; // hanya via Cloud Function
     }
 
-    match /customers/{customerId}/churn_history/{monthDoc} {
+    match /{path=**}/churn_history/{monthDoc} {
       allow read: if isAuditor() || isBrand();
       allow write: if false;
     }
