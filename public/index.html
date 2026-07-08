@@ -427,13 +427,16 @@ const firebaseConfig = {
 
   // ===== Ringkasan (KPI + leaderboard, sudah ada sebelumnya) =====
   async function renderRingkasan(body) {
+    const { from, to } = defaultDateRange();
     body.innerHTML = `
       <div class="cat-title">Ringkasan</div>
-      <div class="warnbox">KPI dihitung langsung dari Firestore (aggregation query), bukan cache.</div>
+      <div class="cat-sub">Customer Lama = sudah pernah beli SEBELUM tanggal awal periode ini, dan beli lagi di periode ini. Customer Baru = transaksi pertamanya justru terjadi di dalam periode ini. Butuh field "first_order_at" ter-backfill - kalau ada customer lama yang belum pernah kena backfill (belum pernah ke-tarik lewat proses hitung Churn), dia bisa salah kehitung sebagai "baru".</div>
+      ${dateFilterHtml('ring-from', 'ring-to', 'ring-apply', from, to)}
       <div class="kpi-grid" id="kpi-grid"></div>
       <div class="section-title">Customer Heavy Spender (Top 20, lifetime)</div>
       <table class="an-table"><thead><tr><th>Customer</th><th>HP</th><th>Total Belanja</th><th>Total Order</th></tr></thead><tbody id="leaderboard-body"></tbody></table>
     `;
+    document.getElementById('ring-apply').addEventListener('click', loadKpis);
     await loadKpis();
     await loadLeaderboard();
   }
@@ -441,37 +444,65 @@ const firebaseConfig = {
   async function loadKpis() {
     const grid = document.getElementById('kpi-grid');
     grid.innerHTML = '<div class="kpi-card"><div class="kv">…</div><div class="kl">Memuat</div></div>';
+    const from = document.getElementById('ring-from').value;
+    const to = document.getElementById('ring-to').value + ' 23:59:59';
+    if (!from || !to) return;
     try {
-      const customersCol = collection(db, 'customers');
-      const countSnap = await getCountFromServer(customersCol);
-      const totalCustomers = countSnap.data().count;
-      const aggSnap = await getAggregateFromServer(customersCol, {
-        totalSpend: sum('total_spend'),
-        totalMargin: sum('total_margin'),
-        totalOrdersSum: sum('total_orders'),
-        avgOrdersPerCustomer: average('total_orders'),
+      // Total customer keseluruhan (tidak dibatasi periode - ini fakta
+      // "berapa banyak customer yang kita punya", bukan yang aktif di periode).
+      const totalCustomersSnap = await getCountFromServer(collection(db, 'customers'));
+      const totalCustomersAllTime = totalCustomersSnap.data().count;
+
+      // Ambil semua order DALAM PERIODE untuk hitung margin%, revenue
+      // customer lama, dan repeat rate - butuh data per-dokumen (bukan
+      // cuma aggregate) karena perlu breakdown per customer.
+      const ordersQuery = query(collection(db, 'orders'), where('created_at', '>=', from), where('created_at', '<=', to));
+      const ordersSnap = await getDocs(ordersQuery);
+
+      let totalNominal = 0, totalMargin = 0;
+      const perCustomer = {}; // { customerId: { count, nominal } }
+      ordersSnap.docs.forEach(d => {
+        const o = d.data();
+        totalNominal += o.total_nominal || 0;
+        totalMargin += o.margin || 0;
+        if (!o.customer_doc_id) return;
+        if (!perCustomer[o.customer_doc_id]) perCustomer[o.customer_doc_id] = { count: 0, nominal: 0 };
+        perCustomer[o.customer_doc_id].count++;
+        perCustomer[o.customer_doc_id].nominal += o.total_nominal || 0;
       });
-      const totalSpend = aggSnap.data().totalSpend || 0;
-      const totalMargin = aggSnap.data().totalMargin || 0;
-      const totalOrdersSum = aggSnap.data().totalOrdersSum || 0;
-      const avgOrdersPerCustomer = aggSnap.data().avgOrdersPerCustomer || 0;
-      const repeatSnap = await getCountFromServer(query(customersCol, where('total_orders', '>', 1)));
-      const repeatCount = repeatSnap.data().count;
-      const repeatRate = totalCustomers ? (repeatCount / totalCustomers * 100).toFixed(1) : '0';
-      const avgSalesPerOrder = totalOrdersSum ? totalSpend / totalOrdersSum : 0;
-      const avgMarginPerOrder = totalOrdersSum ? totalMargin / totalOrdersSum : 0;
-      const avgMarginPerCustomerProxy = totalCustomers ? totalMargin / totalCustomers : 0;
+
+      const customerIdsInPeriod = Object.keys(perCustomer);
+      const totalOrdersInPeriod = ordersSnap.size;
+
+      // Klasifikasi lama vs baru berdasar first_order_at dibanding awal periode.
+      let oldCount = 0, newCount = 0, oldRevenue = 0;
+      await Promise.all(customerIdsInPeriod.map(async (cid) => {
+        const cSnap = await getDoc(doc(db, 'customers', cid));
+        const c = cSnap.exists() ? cSnap.data() : {};
+        const isOld = c.first_order_at && c.first_order_at < from;
+        if (isOld) {
+          oldCount++;
+          oldRevenue += perCustomer[cid].nominal;
+        } else {
+          newCount++;
+        }
+      }));
+
+      const totalCustomersInPeriod = customerIdsInPeriod.length;
+      const marginPct = totalNominal ? (totalMargin / totalNominal * 100) : 0;
+      const oldRevenuePct = totalNominal ? (oldRevenue / totalNominal * 100) : 0;
+      const repeatRateAvg = totalCustomersInPeriod ? (totalOrdersInPeriod / totalCustomersInPeriod) : 0;
+      const oldPct = totalCustomersInPeriod ? (oldCount / totalCustomersInPeriod * 100) : 0;
+      const newPct = totalCustomersInPeriod ? (newCount / totalCustomersInPeriod * 100) : 0;
 
       const cards = [
-        { v: totalCustomers.toLocaleString('id-ID'), l: 'Total Customer', s: '' },
-        { v: 'Rp'+Math.round(totalSpend).toLocaleString('id-ID'), l: 'Total Revenue (Perusahaan, Lifetime)', s: 'Akumulasi semua customer - angka perusahaan, bukan per-customer' },
-        { v: 'Rp'+Math.round(avgSalesPerOrder).toLocaleString('id-ID'), l: 'Rata-rata Sales / Transaksi', s: '' },
-        { v: 'Rp'+Math.round(avgMarginPerOrder).toLocaleString('id-ID'), l: 'Rata-rata Margin / Transaksi', s: 'Cuma order dengan item ter-match SKU cost' },
-        { v: 'Rp'+Math.round(avgMarginPerCustomerProxy).toLocaleString('id-ID'), l: 'Rata-rata Margin/Customer (Proxy CLV)', s: 'BUKAN CLV sesungguhnya - itu perlu tahu siapa yang sudah churn.', cls: 'na' },
-        { v: repeatRate+'%', l: 'Repeat Rate', s: repeatCount+' customer beli >1x' },
-        { v: avgOrdersPerCustomer.toFixed(1), l: 'Rata-rata Order/Customer', s: '' },
+        { v: marginPct.toFixed(1) + '%', l: 'Persentase Margin dari Sales', s: 'Dalam periode yang dipilih' },
+        { v: oldRevenuePct.toFixed(1) + '%', l: 'Persentase Revenue dari Customer Lama', s: 'Dari total revenue periode ini' },
+        { v: repeatRateAvg.toFixed(2) + 'x', l: 'Repeat Rate (rata-rata order/customer)', s: 'Dalam periode yang dipilih' },
+        { v: `${oldPct.toFixed(1)}% lama / ${newPct.toFixed(1)}% baru`, l: 'Persentase Customer Lama vs Baru', s: `${oldCount} lama, ${newCount} baru, dari ${totalCustomersInPeriod} yang aktif di periode ini` },
+        { v: totalCustomersAllTime.toLocaleString('id-ID'), l: 'Total Jumlah Customer (keseluruhan)', s: 'Tidak dibatasi periode' },
       ];
-      grid.innerHTML = cards.map(c => `<div class="kpi-card ${c.cls||''}"><div class="kv">${c.v}</div><div class="kl">${c.l}</div><div class="ks">${c.s}</div></div>`).join('');
+      grid.innerHTML = cards.map(c => `<div class="kpi-card"><div class="kv">${c.v}</div><div class="kl">${c.l}</div><div class="ks">${c.s}</div></div>`).join('');
     } catch (e) {
       grid.innerHTML = `<div class="kpi-card na"><div class="kv">Gagal</div><div class="ks">${e.message}</div></div>`;
     }
