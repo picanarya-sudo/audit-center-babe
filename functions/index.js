@@ -141,7 +141,7 @@ exports.onAuditorUpload = functions.runWith({ timeoutSeconds: 540, memory: '512M
         payment_method_name: row.payment_method_name || null,
         // QRIS WEB = satu-satunya metode bayar di web (keputusan bisnis
         // yang sudah dikonfirmasi) - dipakai untuk kategori Customer Website.
-        is_web_channel: row.payment_method_name === 'QRIS WEB',
+        is_web_channel: String(row.payment_method_name || '').startsWith('QRIS WEB'),
         created_at: row.created_at,
         source_upload: object.name,
         ingested_at: admin.firestore.FieldValue.serverTimestamp(),
@@ -229,7 +229,7 @@ exports.onBrandBulkUpload = functions.runWith({ timeoutSeconds: 540, memory: '51
         margin_is_partial: false,
         created_at: row['order date'],
         payment_method_name: row['payment mode'] || null,
-        is_web_channel: row['payment mode'] === 'QRIS WEB',
+        is_web_channel: String(row['payment mode'] || '').startsWith('QRIS WEB'),
         source_upload: object.name,
         is_historical_seed: true,
         ingested_at: admin.firestore.FieldValue.serverTimestamp(),
