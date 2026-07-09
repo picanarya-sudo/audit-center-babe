@@ -137,7 +137,7 @@
   } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
   import {
     getFirestore, collection, collectionGroup, query, where, orderBy, limit, getDocs, doc, getDoc,
-    updateDoc, serverTimestamp, onSnapshot, getCountFromServer,
+    documentId, updateDoc, serverTimestamp, onSnapshot, getCountFromServer,
     getAggregateFromServer, sum, average
   } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
   import {
@@ -147,14 +147,14 @@
   // TODO: GANTI dengan config project Firebase asli. Placeholder ini
   // sengaja dibuat gagal supaya tidak ada kesan "sudah jalan" padahal
   // belum diisi.
-const firebaseConfig = {
-  apiKey: "AIzaSyBXw1VPrusJDgwjbfkBp3J9PyVBEGqGA3U",
-  authDomain: "audit-center-babe.firebaseapp.com",
-  projectId: "audit-center-babe",
-  storageBucket: "audit-center-babe.firebasestorage.app",
-  messagingSenderId: "95941509340",
-  appId: "1:95941509340:web:8f6a3c7c0d6b0e239eb419"
-};
+  const firebaseConfig = {
+    apiKey: "GANTI_DENGAN_API_KEY_ASLI",
+    authDomain: "GANTI.firebaseapp.com",
+    projectId: "GANTI_PROJECT_ID",
+    storageBucket: "GANTI.appspot.com",
+    messagingSenderId: "GANTI",
+    appId: "GANTI",
+  };
   if (!firebaseConfig.apiKey.startsWith("GANTI")) {
     // ok, config sudah diisi
   } else {
@@ -405,6 +405,22 @@ const firebaseConfig = {
     </div>`;
   }
 
+  // Baca banyak dokumen customer sekaligus (maks 30 per query - batas
+  // Firestore untuk operator 'in'), bukan satu request per customer.
+  // Ini yang mencegah "outstanding request" saat hasil query besar
+  // (ratusan/ribuan customer sekaligus).
+  async function getCustomersBatched(ids) {
+    const uniqueIds = [...new Set(ids)].filter(Boolean);
+    const resultMap = {};
+    for (let i = 0; i < uniqueIds.length; i += 30) {
+      const chunk = uniqueIds.slice(i, i + 30);
+      const q = query(collection(db, 'customers'), where(documentId(), 'in', chunk));
+      const snap = await getDocs(q);
+      snap.docs.forEach(d => { resultMap[d.id] = d.data(); });
+    }
+    return resultMap;
+  }
+
   function downloadCsv(filename, rows) {
     if (!rows || rows.length === 0) return;
     const headers = Object.keys(rows[0]);
@@ -475,10 +491,12 @@ const firebaseConfig = {
       const totalOrdersInPeriod = ordersSnap.size;
 
       // Klasifikasi lama vs baru berdasar first_order_at dibanding awal periode.
+      // Baca semua customer sekaligus lewat batch (bukan satu-satu) -
+      // penting begitu customerIdsInPeriod jumlahnya ratusan/ribuan.
       let oldCount = 0, newCount = 0, oldRevenue = 0;
-      await Promise.all(customerIdsInPeriod.map(async (cid) => {
-        const cSnap = await getDoc(doc(db, 'customers', cid));
-        const c = cSnap.exists() ? cSnap.data() : {};
+      const customerDataMap = await getCustomersBatched(customerIdsInPeriod);
+      customerIdsInPeriod.forEach((cid) => {
+        const c = customerDataMap[cid] || {};
         const isOld = c.first_order_at && c.first_order_at < from;
         if (isOld) {
           oldCount++;
@@ -486,7 +504,7 @@ const firebaseConfig = {
         } else {
           newCount++;
         }
-      }));
+      });
 
       const totalCustomersInPeriod = customerIdsInPeriod.length;
       const marginPct = totalNominal ? (totalMargin / totalNominal * 100) : 0;
@@ -567,17 +585,15 @@ const firebaseConfig = {
         document.getElementById('recompute-churn-btn').addEventListener('click', () => computeChurnForMonth(month, churnMode));
         return;
       }
-      const rows = await Promise.all(snap.docs.map(async (d) => {
-        const customerSnap = await getDoc(d.ref.parent.parent);
-        const c = customerSnap.exists() ? customerSnap.data() : {};
-        const avgMargin = c.total_orders ? (c.total_margin || 0) / c.total_orders : 0;
+      const rows = snap.docs.map((d) => {
+        const data = d.data();
         return {
-          'Nama Customer': c.customer_name || '-',
-          'No HP': c.phone_normalized || '',
-          'Tanggal Terakhir Beli': c.last_order_at || '',
-          'Rata-rata Margin per Transaksi': Math.round(avgMargin),
+          'Nama Customer': data.customer_name || '-',
+          'No HP': data.phone_normalized || '',
+          'Tanggal Terakhir Beli': data.last_order_at || '',
+          'Rata-rata Margin per Transaksi': data.avg_margin_lifetime || 0,
         };
-      }));
+      });
       resultEl.innerHTML = `
         <button class="dl-btn" id="dl-churn-btn">⬇ Download CSV</button>
         <table class="an-table"><thead><tr><th>Nama</th><th>HP</th><th>Terakhir Beli</th><th>Avg Margin/Transaksi</th></tr></thead><tbody>
@@ -635,13 +651,11 @@ const firebaseConfig = {
       const rows = [];
       for (const d of [...snapHigh.docs, ...snapCount.docs]) {
         const data = d.data();
-        const customerSnap = await getDoc(d.ref.parent.parent);
-        const c = customerSnap.exists() ? customerSnap.data() : {};
         rows.push({
           'Bulan': data.year_month,
           'Tipe': data.is_loyal_high_margin ? 'High Margin' : 'High Count',
-          'Nama': c.customer_name || '-',
-          'No HP': c.phone_normalized || '',
+          'Nama': data.customer_name || '-',
+          'No HP': data.phone_normalized || '',
           'Total Margin Bulan Ini': Math.round(data.margin_sum_this_month || 0),
           'Jumlah Transaksi Bulan Ini': data.order_count_this_month || 0,
         });
@@ -800,17 +814,17 @@ const firebaseConfig = {
         return;
       }
 
-      // Ambil nama & HP tiap customer.
-      const rows = await Promise.all(customerIds.map(async (cid) => {
-        const cSnap = await getDoc(doc(db, 'customers', cid));
-        const c = cSnap.exists() ? cSnap.data() : {};
+      // Ambil nama & HP semua customer sekaligus lewat batch.
+      const customerDataMap = await getCustomersBatched(customerIds);
+      const rows = customerIds.map((cid) => {
+        const c = customerDataMap[cid] || {};
         return {
           'Nama Customer': c.customer_name || '-',
           'No HP': c.phone_normalized || '',
           'Total Transaksi (Rp)': Math.round(perCustomer[cid].nominal),
           'Jumlah Transaksi': perCustomer[cid].count,
         };
-      }));
+      });
       rows.sort((a, b) => b['Total Transaksi (Rp)'] - a['Total Transaksi (Rp)']);
 
       resultEl.innerHTML = kpiHtml + `
