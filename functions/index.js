@@ -128,91 +128,113 @@ exports.onAuditorUpload = functions.runWith({ timeoutSeconds: 540, memory: '512M
   let processedCount = 0;
   let newCustomerCount = 0;
   let needsReviewCount = 0;
+  let rowErrorCount = 0;
+  const rowErrors = [];
 
-  for (const row of rows) {
-    const resolution = await resolveCustomer(row.customer_phone, row.customer_id, db);
+  for (const [rowIndex, row] of rows.entries()) {
+    try {
+      const resolution = await resolveCustomer(row.customer_phone, row.customer_id, db);
 
-    if (resolution.status === 'needs_review') {
-      needsReviewCount++;
-      // tetap diproses tapi ditandai, JANGAN di-skip diam-diam
-    }
-    if (resolution.status === 'new') newCustomerCount++;
+      if (resolution.status === 'needs_review') {
+        needsReviewCount++;
+        // tetap diproses tapi ditandai, JANGAN di-skip diam-diam
+      }
+      if (resolution.status === 'new') newCustomerCount++;
 
-    const customerDocId = resolution.existingDocId || resolution.phoneKey;
-    const customerRef = db.collection('customers').doc(customerDocId);
+      // PENTING: kalau HP kosong/tidak valid, phoneKey bisa jadi string
+      // kosong - Firestore MENOLAK doc ID kosong (error "documentPath is
+      // not a valid resource path"), dan itu akan menghentikan SELURUH
+      // proses file kalau tidak ditangkap. Fallback pakai order_no supaya
+      // baris ini tetap tercatat (ditandai untuk review), bukan bikin
+      // seluruh file macet.
+      let customerDocId = resolution.existingDocId || resolution.phoneKey;
+      if (!customerDocId) {
+        customerDocId = `unknown_phone_${sanitizeForDocId(row.order_no || rowIndex)}`;
+        needsReviewCount++;
+      }
+      const customerRef = db.collection('customers').doc(customerDocId);
 
-    const marginResult = calculateOrderMargin(
-      row.order_items,
-      parseFloat(row.total_nominal || 0),
-      skuCostMap
-    );
+      const marginResult = calculateOrderMargin(
+        row.order_items,
+        parseFloat(row.total_nominal || 0),
+        skuCostMap
+      );
 
-    // upsert order by order_no -> idempotent, aman untuk CSV yang tumpang tindih
-    const orderRef = db.collection('orders').doc(row.order_no);
-    await batch.set(
-      orderRef,
-      {
-        order_no: row.order_no,
-        customer_doc_id: customerDocId,
-        outlet_name: row.outlet_name,
-        status: row.status,
-        delivery_type: row.delivery_type,
-        total_quantity: parseInt(row.total_quantity || 0, 10),
-        total_nominal: parseFloat(row.total_nominal || 0),
-        margin: marginResult.margin,
-        margin_is_partial: marginResult.isPartial, // true = ada item belum matched, review manual
-        is_late_arrival: row.is_late_arrival === 'true',
-        payment_method_name: row.payment_method_name || null,
-        // QRIS WEB = satu-satunya metode bayar di web (keputusan bisnis
-        // yang sudah dikonfirmasi) - dipakai untuk kategori Customer Website.
-        is_web_channel: String(row.payment_method_name || '').startsWith('QRIS WEB'),
-        created_at: row.created_at,
-        source_upload: object.name,
-        ingested_at: admin.firestore.FieldValue.serverTimestamp(),
-      },
-      { merge: true }
-    );
-
-    await batch.set(
-      customerRef,
-      {
-        phone_normalized: resolution.phoneKey,
-        phone_needs_review: resolution.status === 'needs_review',
-        customer_id_source: row.customer_id,
-        customer_name: row.customer_name,
-        last_order_at: row.created_at,
-        last_seen_upload: object.name,
-        total_spend: admin.firestore.FieldValue.increment(parseFloat(row.total_nominal || 0)),
-        total_margin: admin.firestore.FieldValue.increment(marginResult.margin),
-        total_orders: admin.firestore.FieldValue.increment(1),
-      },
-      { merge: true }
-    );
-
-    // Task audit HANYA dibuat di jalur ini (auditor), tidak pernah di brand bulk upload
-    const priority = computePriority(row, resolution.status === 'new');
-    if (priority !== 'low_no_task_needed_skip') {
-      const auditRef = db.collection('audits').doc(customerDocId);
+      // upsert order by order_no -> idempotent, aman untuk CSV yang tumpang tindih
+      const orderNoSafe = String(row.order_no || `no_order_no_row_${rowIndex}`).trim();
+      const orderRef = db.collection('orders').doc(orderNoSafe);
       await batch.set(
-        auditRef,
+        orderRef,
         {
+          order_no: orderNoSafe,
           customer_doc_id: customerDocId,
-          // Denormalisasi field tampilan supaya Auditor App tidak perlu
-          // fetch dokumen customer terpisah tiap render list (N+1 reads
-          // di skala 40rb+ customer itu mahal dan lambat).
-          customer_name: row.customer_name,
-          customer_phone: resolution.phoneKey,
-          priority,
-          status: 'pending', // auditor belum isi form
-          created_from_order: row.order_no,
-          last_order_nominal: parseFloat(row.total_nominal || 0),
-          updated_at: admin.firestore.FieldValue.serverTimestamp(),
+          outlet_name: row.outlet_name,
+          status: row.status,
+          delivery_type: row.delivery_type,
+          total_quantity: parseInt(row.total_quantity || 0, 10),
+          total_nominal: parseFloat(row.total_nominal || 0),
+          margin: marginResult.margin,
+          margin_is_partial: marginResult.isPartial, // true = ada item belum matched, review manual
+          is_late_arrival: row.is_late_arrival === 'true',
+          payment_method_name: row.payment_method_name || null,
+          // QRIS WEB = satu-satunya metode bayar di web (keputusan bisnis
+          // yang sudah dikonfirmasi) - dipakai untuk kategori Customer Website.
+          is_web_channel: String(row.payment_method_name || '').startsWith('QRIS WEB'),
+          created_at: row.created_at,
+          source_upload: object.name,
+          ingested_at: admin.firestore.FieldValue.serverTimestamp(),
         },
         { merge: true }
       );
-    }
 
-    processedCount++;
+      await batch.set(
+        customerRef,
+        {
+          phone_normalized: resolution.phoneKey || null,
+          phone_needs_review: !customerDocId.startsWith('unknown_phone_') ? resolution.status === 'needs_review' : true,
+          customer_id_source: row.customer_id,
+          customer_name: row.customer_name,
+          last_order_at: row.created_at,
+          last_seen_upload: object.name,
+          total_spend: admin.firestore.FieldValue.increment(parseFloat(row.total_nominal || 0)),
+          total_margin: admin.firestore.FieldValue.increment(marginResult.margin),
+          total_orders: admin.firestore.FieldValue.increment(1),
+        },
+        { merge: true }
+      );
+
+      // Task audit HANYA dibuat di jalur ini (auditor), tidak pernah di brand bulk upload
+      const priority = computePriority(row, resolution.status === 'new');
+      if (priority !== 'low_no_task_needed_skip') {
+        const auditRef = db.collection('audits').doc(customerDocId);
+        await batch.set(
+          auditRef,
+          {
+            customer_doc_id: customerDocId,
+            // Denormalisasi field tampilan supaya Auditor App tidak perlu
+            // fetch dokumen customer terpisah tiap render list (N+1 reads
+            // di skala 40rb+ customer itu mahal dan lambat).
+            customer_name: row.customer_name,
+            customer_phone: resolution.phoneKey,
+            priority,
+            status: 'pending', // auditor belum isi form
+            created_from_order: row.order_no,
+            last_order_nominal: parseFloat(row.total_nominal || 0),
+            updated_at: admin.firestore.FieldValue.serverTimestamp(),
+          },
+          { merge: true }
+        );
+      }
+
+      processedCount++;
+    } catch (rowError) {
+      // SATU baris bermasalah TIDAK BOLEH menghentikan seluruh file -
+      // catat errornya, lanjut ke baris berikutnya.
+      rowErrorCount++;
+      if (rowErrors.length < 20) {
+        rowErrors.push({ rowIndex, order_no: row.order_no, error: rowError.message });
+      }
+    }
   }
 
   await batch.commitAll();
@@ -222,6 +244,8 @@ exports.onAuditorUpload = functions.runWith({ timeoutSeconds: 540, memory: '512M
     processedCount,
     newCustomerCount,
     needsReviewCount,
+    rowErrorCount,
+    rowErrors, // maksimal 20 contoh pertama - cek ini kalau rowErrorCount > 0
   });
 
   return null;
@@ -237,55 +261,77 @@ exports.onBrandBulkUpload = functions.runWith({ timeoutSeconds: 540, memory: '51
   const originalFileName = extractOriginalFilename(object.name);
 
   const batch = new ChunkedBatchWriter(db);
+  let processedCount = 0;
+  let rowErrorCount = 0;
+  const rowErrors = [];
 
-  for (const row of rows) {
-    // format lama sudah punya margin langsung, TIDAK perlu matching SKU
-    const resolution = await resolveCustomer(row['customer phone'], row['customer id'], db);
-    const customerDocId = resolution.existingDocId || resolution.phoneKey;
+  for (const [rowIndex, row] of rows.entries()) {
+    try {
+      // format lama sudah punya margin langsung, TIDAK perlu matching SKU
+      const resolution = await resolveCustomer(row['customer phone'], row['customer id'], db);
+      let customerDocId = resolution.existingDocId || resolution.phoneKey;
+      if (!customerDocId) {
+        // HP kosong/tidak valid -> jangan pakai string kosong sebagai doc ID
+        // (Firestore menolak itu dan akan menghentikan SELURUH file kalau
+        // tidak ditangkap di sini).
+        customerDocId = `unknown_phone_${sanitizeForDocId(row['order no'] || rowIndex)}`;
+      }
 
-    // Doc ID gabungan nama file asli + order_no - lihat komentar di
-    // extractOriginalFilename() untuk alasan kenapa order_no polos tidak aman.
-    const orderDocId = sanitizeForDocId(`${originalFileName}__${row['order no']}`);
-    const orderRef = db.collection('orders').doc(orderDocId);
-    await batch.set(
-      orderRef,
-      {
-        order_no: String(row['order no']).trim(),
-        customer_doc_id: customerDocId,
-        total_nominal: parseFloat(row['net amount'] || 0),
-        margin: parseFloat(row['gross profit'] || 0), // langsung dari kolom lama, bukan hasil matching
-        margin_is_partial: false,
-        created_at: row['order date'],
-        payment_method_name: row['payment mode'] || null,
-        is_web_channel: String(row['payment mode'] || '').startsWith('QRIS WEB'),
-        source_upload: object.name,
-        is_historical_seed: true,
-        ingested_at: admin.firestore.FieldValue.serverTimestamp(),
-      },
-      { merge: true }
-    );
+      // Doc ID gabungan nama file asli + order_no - lihat komentar di
+      // extractOriginalFilename() untuk alasan kenapa order_no polos tidak aman.
+      const orderNoSafe = String(row['order no'] || `no_order_no_row_${rowIndex}`).trim();
+      const orderDocId = sanitizeForDocId(`${originalFileName}__${orderNoSafe}`);
+      const orderRef = db.collection('orders').doc(orderDocId);
+      await batch.set(
+        orderRef,
+        {
+          order_no: orderNoSafe,
+          customer_doc_id: customerDocId,
+          total_nominal: parseFloat(row['net amount'] || 0),
+          margin: parseFloat(row['gross profit'] || 0), // langsung dari kolom lama, bukan hasil matching
+          margin_is_partial: false,
+          created_at: row['order date'],
+          payment_method_name: row['payment mode'] || null,
+          is_web_channel: String(row['payment mode'] || '').startsWith('QRIS WEB'),
+          source_upload: object.name,
+          is_historical_seed: true,
+          ingested_at: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
 
-    await batch.set(
-      db.collection('customers').doc(customerDocId),
-      {
-        phone_normalized: resolution.phoneKey,
-        customer_id_source: row['customer id'],
-        customer_name: row['customer name'],
-        total_spend: admin.firestore.FieldValue.increment(parseFloat(row['net amount'] || 0)),
-        total_margin: admin.firestore.FieldValue.increment(parseFloat(row['gross profit'] || 0)),
-        total_orders: admin.firestore.FieldValue.increment(1),
-      },
-      { merge: true }
-    );
+      await batch.set(
+        db.collection('customers').doc(customerDocId),
+        {
+          phone_normalized: resolution.phoneKey || null,
+          customer_id_source: row['customer id'],
+          customer_name: row['customer name'],
+          total_spend: admin.firestore.FieldValue.increment(parseFloat(row['net amount'] || 0)),
+          total_margin: admin.firestore.FieldValue.increment(parseFloat(row['gross profit'] || 0)),
+          total_orders: admin.firestore.FieldValue.increment(1),
+        },
+        { merge: true }
+      );
 
-    // TIDAK ADA batch.set ke collection('audits') di sini - sengaja,
-    // sesuai permintaan: bulk seed brand tidak boleh membuat task auditor.
+      // TIDAK ADA batch.set ke collection('audits') di sini - sengaja,
+      // sesuai permintaan: bulk seed brand tidak boleh membuat task auditor.
+      processedCount++;
+    } catch (rowError) {
+      // SATU baris bermasalah TIDAK BOLEH menghentikan seluruh file.
+      rowErrorCount++;
+      if (rowErrors.length < 20) {
+        rowErrors.push({ rowIndex, order_no: row['order no'], error: rowError.message });
+      }
+    }
   }
 
   await batch.commitAll();
   functions.logger.info('onBrandBulkUpload selesai (seed historis, tanpa task audit)', {
     file: object.name,
     rowCount: rows.length,
+    processedCount,
+    rowErrorCount,
+    rowErrors, // maksimal 20 contoh pertama - cek ini kalau rowErrorCount > 0
   });
 
   return null;
@@ -338,32 +384,38 @@ exports.onSkuUpload = functions.region('asia-southeast2').storage.object().onFin
   const batch = new ChunkedBatchWriter(db);
   let count = 0;
   let skippedNoName = 0;
+  let rowErrorCount = 0;
 
-  for (const row of rows) {
-    const itemName = row.name || row.item_name;
-    const unitCost = parseFloat(row.buy_price || row.unit_cost || 0);
+  for (const [rowIndex, row] of rows.entries()) {
+    try {
+      const itemName = row.name || row.item_name;
+      const unitCost = parseFloat(row.buy_price || row.unit_cost || 0);
 
-    if (!itemName) {
-      skippedNoName++;
-      continue;
+      if (!itemName) {
+        skippedNoName++;
+        continue;
+      }
+
+      // doc ID aman dari nama produk (huruf/angka saja, sisanya jadi underscore)
+      const docId = normalizeName(itemName).replace(/[^a-z0-9]+/g, '_').slice(0, 140);
+
+      await batch.set(
+        db.collection('sku_costs').doc(docId),
+        {
+          item_name: itemName,
+          unit_cost: unitCost,
+          sku_code: row.sku || row.barcode || null,
+          category: row.category || null,
+          source_upload: object.name,
+          updated_at: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
+      count++;
+    } catch (rowError) {
+      rowErrorCount++;
+      functions.logger.warn('onSkuUpload: gagal proses baris', { rowIndex, error: rowError.message });
     }
-
-    // doc ID aman dari nama produk (huruf/angka saja, sisanya jadi underscore)
-    const docId = normalizeName(itemName).replace(/[^a-z0-9]+/g, '_').slice(0, 140);
-
-    await batch.set(
-      db.collection('sku_costs').doc(docId),
-      {
-        item_name: itemName,
-        unit_cost: unitCost,
-        sku_code: row.sku || row.barcode || null,
-        category: row.category || null,
-        source_upload: object.name,
-        updated_at: admin.firestore.FieldValue.serverTimestamp(),
-      },
-      { merge: true }
-    );
-    count++;
   }
 
   await batch.commitAll();
