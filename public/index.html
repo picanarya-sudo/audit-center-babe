@@ -778,12 +778,47 @@ const firebaseConfig = {
     try {
       const q = query(collection(db, 'orders'), where('is_web_channel', '==', true), where('created_at', '>=', from), where('created_at', '<=', to));
       const snap = await getDocs(q);
-      const customerIds = new Set();
-      snap.docs.forEach(d => customerIds.add(d.data().customer_doc_id));
-      resultEl.innerHTML = `<div class="kpi-grid">
+
+      // Kelompokkan order per customer dalam periode ini.
+      const perCustomer = {}; // { customerId: { count, nominal } }
+      snap.docs.forEach(d => {
+        const o = d.data();
+        if (!o.customer_doc_id) return;
+        if (!perCustomer[o.customer_doc_id]) perCustomer[o.customer_doc_id] = { count: 0, nominal: 0 };
+        perCustomer[o.customer_doc_id].count++;
+        perCustomer[o.customer_doc_id].nominal += o.total_nominal || 0;
+      });
+      const customerIds = Object.keys(perCustomer);
+
+      const kpiHtml = `<div class="kpi-grid">
         <div class="kpi-card"><div class="kv">${snap.size}</div><div class="kl">Total Order via Website</div></div>
-        <div class="kpi-card"><div class="kv">${customerIds.size}</div><div class="kl">Customer Unik</div></div>
+        <div class="kpi-card"><div class="kv">${customerIds.length}</div><div class="kl">Customer Unik</div></div>
       </div>`;
+
+      if (customerIds.length === 0) {
+        resultEl.innerHTML = kpiHtml + '<div class="warnbox">Tidak ada customer website di periode ini.</div>';
+        return;
+      }
+
+      // Ambil nama & HP tiap customer.
+      const rows = await Promise.all(customerIds.map(async (cid) => {
+        const cSnap = await getDoc(doc(db, 'customers', cid));
+        const c = cSnap.exists() ? cSnap.data() : {};
+        return {
+          'Nama Customer': c.customer_name || '-',
+          'No HP': c.phone_normalized || '',
+          'Total Transaksi (Rp)': Math.round(perCustomer[cid].nominal),
+          'Jumlah Transaksi': perCustomer[cid].count,
+        };
+      }));
+      rows.sort((a, b) => b['Total Transaksi (Rp)'] - a['Total Transaksi (Rp)']);
+
+      resultEl.innerHTML = kpiHtml + `
+        <button class="dl-btn" id="dl-web-btn">⬇ Download CSV</button>
+        <table class="an-table"><thead><tr><th>Nama</th><th>HP</th><th>Total Transaksi</th><th>Jumlah Transaksi</th></tr></thead><tbody>
+        ${rows.map(r => `<tr><td style="text-transform:capitalize">${r['Nama Customer']}</td><td class="mono">${r['No HP']}</td><td class="mono">Rp${r['Total Transaksi (Rp)'].toLocaleString('id-ID')}</td><td class="mono">${r['Jumlah Transaksi']}</td></tr>`).join('')}
+        </tbody></table>`;
+      document.getElementById('dl-web-btn').addEventListener('click', () => downloadCsv('customer_website.csv', rows));
     } catch (e) {
       resultEl.innerHTML = `<div class="warnbox">Query gagal: ${e.message} (kemungkinan butuh composite index baru)</div>`;
     }
