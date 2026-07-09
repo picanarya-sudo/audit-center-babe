@@ -338,8 +338,131 @@ exports.onBrandBulkUpload = functions.runWith({ timeoutSeconds: 540, memory: '51
 });
 
 // ============================================================
-// setRole - set custom claim role LEWAT BROWSER, tanpa terminal.
-// Buka URL ini di browser setelah deploy:
+// TRIGGER 5: Hitung Ringkasan untuk satu periode - BARU. Sebelumnya
+// dashboard Ringkasan mencoba download SEMUA order dalam periode
+// langsung ke browser untuk klasifikasi customer lama/baru - ini gagal
+// ("Too many outstanding requests") begitu volumenya belasan ribu order.
+// Perbaikan: proses berat ini dipindah ke server (kapasitas jauh lebih
+// besar dari browser), hasilnya di-cache di Firestore, browser tinggal
+// baca satu dokumen ringkasan - sama pola dengan Churn.
+// ============================================================
+async function computeRingkasanForPeriod(fromDate, toDate) {
+  const from = fromDate;
+  const to = toDate + ' 23:59:59';
+
+  const totalCustomersSnap = await db.collection('customers').count().get();
+  const totalCustomersAllTime = totalCustomersSnap.data().count;
+
+  const ordersSnap = await db.collection('orders')
+    .where('created_at', '>=', from)
+    .where('created_at', '<=', to)
+    .get();
+
+  let totalNominal = 0, totalMargin = 0;
+  const perCustomer = {};
+  ordersSnap.docs.forEach((d) => {
+    const o = d.data();
+    totalNominal += o.total_nominal || 0;
+    totalMargin += o.margin || 0;
+    if (!o.customer_doc_id) return;
+    if (!perCustomer[o.customer_doc_id]) perCustomer[o.customer_doc_id] = { count: 0, nominal: 0 };
+    perCustomer[o.customer_doc_id].count++;
+    perCustomer[o.customer_doc_id].nominal += o.total_nominal || 0;
+  });
+
+  const customerIdsInPeriod = Object.keys(perCustomer);
+  const totalOrdersInPeriod = ordersSnap.size;
+
+  // Baca semua dokumen customer yang relevan di sini (server, bukan
+  // browser) - kapasitas Cloud Function jauh lebih besar untuk ini.
+  let oldCount = 0, newCount = 0, oldRevenue = 0;
+  const CHUNK = 300;
+  for (let i = 0; i < customerIdsInPeriod.length; i += CHUNK) {
+    const chunk = customerIdsInPeriod.slice(i, i + CHUNK);
+    const snaps = await Promise.all(chunk.map((cid) => db.collection('customers').doc(cid).get()));
+    snaps.forEach((snap, idx) => {
+      const cid = chunk[idx];
+      const c = snap.exists ? snap.data() : {};
+      const isOld = c.first_order_at && c.first_order_at < from;
+      if (isOld) {
+        oldCount++;
+        oldRevenue += perCustomer[cid].nominal;
+      } else {
+        newCount++;
+      }
+    });
+  }
+
+  const totalCustomersInPeriod = customerIdsInPeriod.length;
+  const marginPct = totalNominal ? (totalMargin / totalNominal * 100) : 0;
+  const oldRevenuePct = totalNominal ? (oldRevenue / totalNominal * 100) : 0;
+  const repeatRateAvg = totalCustomersInPeriod ? (totalOrdersInPeriod / totalCustomersInPeriod) : 0;
+  const oldPct = totalCustomersInPeriod ? (oldCount / totalCustomersInPeriod * 100) : 0;
+  const newPct = totalCustomersInPeriod ? (newCount / totalCustomersInPeriod * 100) : 0;
+
+  const summary = {
+    from, to: toDate,
+    total_customers_all_time: totalCustomersAllTime,
+    margin_pct: marginPct,
+    old_revenue_pct: oldRevenuePct,
+    repeat_rate_avg: repeatRateAvg,
+    old_count: oldCount,
+    new_count: newCount,
+    old_pct: oldPct,
+    new_pct: newPct,
+    total_customers_in_period: totalCustomersInPeriod,
+    computed_at: admin.firestore.FieldValue.serverTimestamp(),
+  };
+
+  const cacheDocId = sanitizeForDocId(`${fromDate}_${toDate}`);
+  await db.collection('analytics_cache').doc(`ringkasan_${cacheDocId}`).set(summary, { merge: true });
+
+  return summary;
+}
+
+exports.triggerRingkasanCompute = functions
+  .runWith({ timeoutSeconds: 540, memory: '512MB' })
+  .https.onRequest(async (req, res) => {
+    res.set('Access-Control-Allow-Origin', '*');
+    res.set('Access-Control-Allow-Headers', 'Authorization, Content-Type');
+    if (req.method === 'OPTIONS') {
+      res.status(204).send('');
+      return;
+    }
+
+    const authHeader = req.headers.authorization || '';
+    const idToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+    if (!idToken) {
+      res.status(401).send('Unauthorized - tidak ada token login.');
+      return;
+    }
+    let decodedToken;
+    try {
+      decodedToken = await admin.auth().verifyIdToken(idToken);
+    } catch (e) {
+      res.status(401).send('Token tidak valid: ' + e.message);
+      return;
+    }
+    if (decodedToken.role !== 'brand') {
+      res.status(403).send('Forbidden - akun ini bukan role brand.');
+      return;
+    }
+
+    const { from, to } = req.query;
+    if (!from || !to) {
+      res.status(400).send('Perlu parameter ?from=YYYY-MM-DD&to=YYYY-MM-DD');
+      return;
+    }
+
+    try {
+      const result = await computeRingkasanForPeriod(from, to);
+      res.status(200).json(result);
+    } catch (e) {
+      res.status(500).send('Error: ' + e.message);
+    }
+  });
+
+
 //   https://REGION-PROJECTID.cloudfunctions.net/setRole?email=...&role=auditor&secret=...
 // GANTI ADMIN_SECRET di bawah sebelum deploy - siapa pun yang tahu
 // secret ini bisa mengubah role siapa saja, jadi jangan dibagikan
