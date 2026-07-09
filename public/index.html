@@ -147,14 +147,14 @@
   // TODO: GANTI dengan config project Firebase asli. Placeholder ini
   // sengaja dibuat gagal supaya tidak ada kesan "sudah jalan" padahal
   // belum diisi.
-  const firebaseConfig = {
-    apiKey: "GANTI_DENGAN_API_KEY_ASLI",
-    authDomain: "GANTI.firebaseapp.com",
-    projectId: "GANTI_PROJECT_ID",
-    storageBucket: "GANTI.appspot.com",
-    messagingSenderId: "GANTI",
-    appId: "GANTI",
-  };
+const firebaseConfig = {
+  apiKey: "AIzaSyBXw1VPrusJDgwjbfkBp3J9PyVBEGqGA3U",
+  authDomain: "audit-center-babe.firebaseapp.com",
+  projectId: "audit-center-babe",
+  storageBucket: "audit-center-babe.firebasestorage.app",
+  messagingSenderId: "95941509340",
+  appId: "1:95941509340:web:8f6a3c7c0d6b0e239eb419"
+};
   if (!firebaseConfig.apiKey.startsWith("GANTI")) {
     // ok, config sudah diisi
   } else {
@@ -461,66 +461,60 @@
     const grid = document.getElementById('kpi-grid');
     grid.innerHTML = '<div class="kpi-card"><div class="kv">…</div><div class="kl">Memuat</div></div>';
     const from = document.getElementById('ring-from').value;
-    const to = document.getElementById('ring-to').value + ' 23:59:59';
+    const to = document.getElementById('ring-to').value;
     if (!from || !to) return;
+    // Perhitungan berat (scan semua order + klasifikasi customer) sekarang
+    // dilakukan di Cloud Function, bukan di browser - lihat catatan di
+    // computeRingkasanForPeriod (functions/index.js). Di sini cuma baca
+    // cache; kalau belum pernah dihitung, tampilkan tombol hitung.
+    const cacheDocId = `ringkasan_${sanitizeForFsId(from)}_${sanitizeForFsId(to)}`;
     try {
-      // Total customer keseluruhan (tidak dibatasi periode - ini fakta
-      // "berapa banyak customer yang kita punya", bukan yang aktif di periode).
-      const totalCustomersSnap = await getCountFromServer(collection(db, 'customers'));
-      const totalCustomersAllTime = totalCustomersSnap.data().count;
+      const cacheSnap = await getDoc(doc(db, 'analytics_cache', cacheDocId));
+      if (!cacheSnap.exists()) {
+        grid.innerHTML = `<div class="kpi-card na" style="grid-column:1/-1;">
+          <div class="kv" style="font-size:15px;">Periode ini belum pernah dihitung</div>
+          <div class="ks">Perhitungan dilakukan di server (bukan browser) supaya tidak macet untuk data besar.
+          <button id="compute-ringkasan-btn" style="margin-left:8px;background:var(--accent);color:#fff;border:none;padding:6px 14px;border-radius:6px;cursor:pointer;">Hitung Ringkasan Periode Ini</button></div>
+        </div>`;
+        document.getElementById('compute-ringkasan-btn').addEventListener('click', () => computeRingkasanForPeriod(from, to));
+        return;
+      }
+      renderRingkasanCards(cacheSnap.data());
+    } catch (e) {
+      grid.innerHTML = `<div class="kpi-card na"><div class="kv">Gagal</div><div class="ks">${e.message}</div></div>`;
+    }
+  }
 
-      // Ambil semua order DALAM PERIODE untuk hitung margin%, revenue
-      // customer lama, dan repeat rate - butuh data per-dokumen (bukan
-      // cuma aggregate) karena perlu breakdown per customer.
-      const ordersQuery = query(collection(db, 'orders'), where('created_at', '>=', from), where('created_at', '<=', to));
-      const ordersSnap = await getDocs(ordersQuery);
+  function renderRingkasanCards(s) {
+    const grid = document.getElementById('kpi-grid');
+    const cards = [
+      { v: s.margin_pct.toFixed(1) + '%', l: 'Persentase Margin dari Sales', s: 'Dalam periode yang dipilih' },
+      { v: s.old_revenue_pct.toFixed(1) + '%', l: 'Persentase Revenue dari Customer Lama', s: 'Dari total revenue periode ini' },
+      { v: s.repeat_rate_avg.toFixed(2) + 'x', l: 'Repeat Rate (rata-rata order/customer)', s: 'Dalam periode yang dipilih' },
+      { v: `${s.old_pct.toFixed(1)}% lama / ${s.new_pct.toFixed(1)}% baru`, l: 'Persentase Customer Lama vs Baru', s: `${s.old_count} lama, ${s.new_count} baru, dari ${s.total_customers_in_period} yang aktif di periode ini` },
+      { v: s.total_customers_all_time.toLocaleString('id-ID'), l: 'Total Jumlah Customer (keseluruhan)', s: 'Tidak dibatasi periode' },
+    ];
+    grid.innerHTML = cards.map(c => `<div class="kpi-card"><div class="kv">${c.v}</div><div class="kl">${c.l}</div><div class="ks">${c.s}</div></div>`).join('') +
+      `<div style="grid-column:1/-1;font-size:10.5px;color:var(--ct-text-faint);margin-top:-6px;">Dihitung terakhir kali - cache tersimpan di server. Klik "Terapkan" lagi untuk cek ulang, atau ganti tanggal untuk periode baru.</div>`;
+  }
 
-      let totalNominal = 0, totalMargin = 0;
-      const perCustomer = {}; // { customerId: { count, nominal } }
-      ordersSnap.docs.forEach(d => {
-        const o = d.data();
-        totalNominal += o.total_nominal || 0;
-        totalMargin += o.margin || 0;
-        if (!o.customer_doc_id) return;
-        if (!perCustomer[o.customer_doc_id]) perCustomer[o.customer_doc_id] = { count: 0, nominal: 0 };
-        perCustomer[o.customer_doc_id].count++;
-        perCustomer[o.customer_doc_id].nominal += o.total_nominal || 0;
-      });
+  function sanitizeForFsId(s) {
+    return String(s).trim().replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 100);
+  }
 
-      const customerIdsInPeriod = Object.keys(perCustomer);
-      const totalOrdersInPeriod = ordersSnap.size;
-
-      // Klasifikasi lama vs baru berdasar first_order_at dibanding awal periode.
-      // Baca semua customer sekaligus lewat batch (bukan satu-satu) -
-      // penting begitu customerIdsInPeriod jumlahnya ratusan/ribuan.
-      let oldCount = 0, newCount = 0, oldRevenue = 0;
-      const customerDataMap = await getCustomersBatched(customerIdsInPeriod);
-      customerIdsInPeriod.forEach((cid) => {
-        const c = customerDataMap[cid] || {};
-        const isOld = c.first_order_at && c.first_order_at < from;
-        if (isOld) {
-          oldCount++;
-          oldRevenue += perCustomer[cid].nominal;
-        } else {
-          newCount++;
-        }
-      });
-
-      const totalCustomersInPeriod = customerIdsInPeriod.length;
-      const marginPct = totalNominal ? (totalMargin / totalNominal * 100) : 0;
-      const oldRevenuePct = totalNominal ? (oldRevenue / totalNominal * 100) : 0;
-      const repeatRateAvg = totalCustomersInPeriod ? (totalOrdersInPeriod / totalCustomersInPeriod) : 0;
-      const oldPct = totalCustomersInPeriod ? (oldCount / totalCustomersInPeriod * 100) : 0;
-      const newPct = totalCustomersInPeriod ? (newCount / totalCustomersInPeriod * 100) : 0;
-
-      const cards = [
-        { v: marginPct.toFixed(1) + '%', l: 'Persentase Margin dari Sales', s: 'Dalam periode yang dipilih' },
-        { v: oldRevenuePct.toFixed(1) + '%', l: 'Persentase Revenue dari Customer Lama', s: 'Dari total revenue periode ini' },
-        { v: repeatRateAvg.toFixed(2) + 'x', l: 'Repeat Rate (rata-rata order/customer)', s: 'Dalam periode yang dipilih' },
-        { v: `${oldPct.toFixed(1)}% lama / ${newPct.toFixed(1)}% baru`, l: 'Persentase Customer Lama vs Baru', s: `${oldCount} lama, ${newCount} baru, dari ${totalCustomersInPeriod} yang aktif di periode ini` },
-        { v: totalCustomersAllTime.toLocaleString('id-ID'), l: 'Total Jumlah Customer (keseluruhan)', s: 'Tidak dibatasi periode' },
-      ];
-      grid.innerHTML = cards.map(c => `<div class="kpi-card"><div class="kv">${c.v}</div><div class="kl">${c.l}</div><div class="ks">${c.s}</div></div>`).join('');
+  async function computeRingkasanForPeriod(from, to) {
+    const grid = document.getElementById('kpi-grid');
+    grid.innerHTML = '<div class="kpi-card na" style="grid-column:1/-1;"><div class="kv" style="font-size:14px;">Menghitung di server... bisa beberapa menit untuk data besar, jangan tutup halaman.</div></div>';
+    try {
+      const idToken = await auth.currentUser.getIdToken();
+      const url = `https://us-central1-${firebaseConfig.projectId}.cloudfunctions.net/triggerRingkasanCompute?from=${from}&to=${to}`;
+      const response = await fetch(url, { headers: { 'Authorization': 'Bearer ' + idToken } });
+      const data = await response.json();
+      if (!response.ok) {
+        grid.innerHTML = `<div class="kpi-card na"><div class="kv">Gagal</div><div class="ks">${JSON.stringify(data)}</div></div>`;
+        return;
+      }
+      renderRingkasanCards(data);
     } catch (e) {
       grid.innerHTML = `<div class="kpi-card na"><div class="kv">Gagal</div><div class="ks">${e.message}</div></div>`;
     }
