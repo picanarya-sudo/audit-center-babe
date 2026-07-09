@@ -52,6 +52,30 @@ async function readSpreadsheetFromStorage(fileName) {
   return XLSX.utils.sheet_to_json(firstSheet, { defval: '' });
 }
 
+/**
+ * PENTING - bug nyata yang ditemukan: nomor order dari sistem lama TIDAK
+ * unik lintas outlet. Contoh nyata: "OL26060400001088" muncul di file
+ * Jebres DAN file Yamin, untuk transaksi customer yang BEDA TOTAL (nama,
+ * tanggal, nominal semua beda). Kalau doc ID cuma pakai order_no polos,
+ * outlet yang diproses belakangan akan MENIMPA data outlet lain secara
+ * diam-diam - inilah yang menyebabkan jumlah transaksi jauh lebih sedikit
+ * dari yang seharusnya.
+ *
+ * Perbaikan: doc ID gabungan nama file asli (yang sudah membawa identitas
+ * outlet, mis. "KULKAS_BABE_JEBRES_...") + order_no. Nama file asli
+ * diekstrak dari path Storage, membuang prefix timestamp yang ditambahkan
+ * otomatis saat upload - supaya upload ULANG file yang SAMA tetap
+ * ter-update (idempotent), bukan bikin dokumen baru.
+ */
+function extractOriginalFilename(storageObjectName) {
+  const lastSegment = storageObjectName.split('/').pop();
+  return lastSegment.replace(/^\d+_/, ''); // buang "1720350000000_" di depan
+}
+
+function sanitizeForDocId(s) {
+  return String(s).trim().replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 300);
+}
+
 // ============================================================
 // TRIGGER 1: Upload harian oleh Auditor (Baus format, buat task)
 // ============================================================
@@ -210,6 +234,7 @@ exports.onBrandBulkUpload = functions.runWith({ timeoutSeconds: 540, memory: '51
   if (!object.name.startsWith('brand-uploads/')) return null;
 
   const rows = await readSpreadsheetFromStorage(object.name);
+  const originalFileName = extractOriginalFilename(object.name);
 
   const batch = new ChunkedBatchWriter(db);
 
@@ -218,11 +243,14 @@ exports.onBrandBulkUpload = functions.runWith({ timeoutSeconds: 540, memory: '51
     const resolution = await resolveCustomer(row['customer phone'], row['customer id'], db);
     const customerDocId = resolution.existingDocId || resolution.phoneKey;
 
-    const orderRef = db.collection('orders').doc(row['order no']);
+    // Doc ID gabungan nama file asli + order_no - lihat komentar di
+    // extractOriginalFilename() untuk alasan kenapa order_no polos tidak aman.
+    const orderDocId = sanitizeForDocId(`${originalFileName}__${row['order no']}`);
+    const orderRef = db.collection('orders').doc(orderDocId);
     await batch.set(
       orderRef,
       {
-        order_no: row['order no'],
+        order_no: String(row['order no']).trim(),
         customer_doc_id: customerDocId,
         total_nominal: parseFloat(row['net amount'] || 0),
         margin: parseFloat(row['gross profit'] || 0), // langsung dari kolom lama, bukan hasil matching
