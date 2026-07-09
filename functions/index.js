@@ -486,6 +486,12 @@ async function runChurnEvaluation(evalYear, evalMonth) {
     const months = Object.keys(counts).sort();
     const firstMonthKey = months[0];
 
+    // Baca dokumen customer SEKALI di sini (bukan tiap kali app dibuka) -
+    // dipakai untuk denormalisasi nama/HP ke churn_history di bawah, supaya
+    // frontend tidak perlu baca dokumen customer terpisah per hasil.
+    const customerSnap = await db.collection('customers').doc(customerId).get();
+    const customerData = customerSnap.exists ? customerSnap.data() : {};
+
     // first_order_at ditulis ke dokumen customer langsung (fakta lifetime,
     // bukan per bulan) - dilakukan untuk SEMUA customer tiap fungsi ini
     // jalan, terlepas dari apakah mereka aktif di evalMonth atau tidak.
@@ -505,10 +511,17 @@ async function runChurnEvaluation(evalYear, evalMonth) {
       // begitu satu bulan pernah dihitung, hasilnya tetap ada selamanya.
       // Sekalian simpan margin_sum & order_count BULAN INI SAJA (bukan
       // lifetime) - dipakai untuk kategori Loyal Customer & One Time Buyer.
+      // customer_name/phone_normalized DIDENORMALISASI di sini supaya
+      // frontend tidak perlu N+1 read per customer (itu yang bikin
+      // "outstanding request" saat data sudah besar).
       await batch.set(
         db.collection('customers').doc(customerId).collection('churn_history').doc(yearMonthKey),
         {
           year_month: yearMonthKey,
+          customer_name: customerData.customer_name || null,
+          phone_normalized: customerData.phone_normalized || null,
+          last_order_at: customerData.last_order_at || null,
+          avg_margin_lifetime: customerData.total_orders ? Math.round((customerData.total_margin || 0) / customerData.total_orders) : 0,
           is_churn_bulanan: result.isChurnBulanan,
           is_churn_biasa: result.isChurnBiasa,
           lifetime_orders_at_eval: result.lifetimeOrders,
