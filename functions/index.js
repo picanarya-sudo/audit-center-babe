@@ -228,6 +228,8 @@ exports.onBrandBulkUpload = functions.runWith({ timeoutSeconds: 540, memory: '51
         margin: parseFloat(row['gross profit'] || 0), // langsung dari kolom lama, bukan hasil matching
         margin_is_partial: false,
         created_at: row['order date'],
+        payment_method_name: row['payment mode'] || null,
+        is_web_channel: row['payment mode'] === 'QRIS WEB',
         source_upload: object.name,
         is_historical_seed: true,
         ingested_at: admin.firestore.FieldValue.serverTimestamp(),
