@@ -605,6 +605,12 @@ async function runChurnEvaluation(evalYear, evalMonth) {
 
   const yearMonthKey = `${evalYear}-${String(evalMonth).padStart(2, '0')}`;
 
+  // Akumulator untuk ringkasan bulan ini - dihitung SEKALIAN dari data yang
+  // sudah di-scan untuk churn, tanpa scan tambahan. Ini yang membuat
+  // filter "satu bulan penuh" di Ringkasan bisa instan tanpa tombol hitung.
+  let monthTotalNominal = 0, monthTotalMargin = 0, monthOrderCount = 0;
+  let monthNewCustomerCount = 0, monthOldCustomerCount = 0, monthOldRevenue = 0;
+
   for (const [customerId, counts] of Object.entries(monthlyCounts)) {
     const months = Object.keys(counts).sort();
     const firstMonthKey = months[0];
@@ -623,6 +629,25 @@ async function runChurnEvaluation(evalYear, evalMonth) {
       { first_order_at: firstOrderDate[customerId] },
       { merge: true }
     );
+
+    // Kontribusi ke ringkasan bulan ini - HANYA kalau customer ini
+    // benar-benar ada aktivitas di yearMonthKey (bukan bulan lain di
+    // riwayatnya).
+    const orderCountThisMonth = counts[yearMonthKey] || 0;
+    if (orderCountThisMonth > 0) {
+      const nominalThisMonth = monthlyNominal[customerId][yearMonthKey] || 0;
+      monthTotalNominal += nominalThisMonth;
+      monthTotalMargin += monthlyMargin[customerId][yearMonthKey] || 0;
+      monthOrderCount += orderCountThisMonth;
+
+      const isNewThisMonth = firstMonthKey === yearMonthKey;
+      if (isNewThisMonth) {
+        monthNewCustomerCount++;
+      } else {
+        monthOldCustomerCount++;
+        monthOldRevenue += nominalThisMonth;
+      }
+    }
 
     try {
       const history = buildContinuousMonthlyHistory(firstMonthKey, { year: evalYear, month: evalMonth }, counts);
@@ -666,6 +691,29 @@ async function runChurnEvaluation(evalYear, evalMonth) {
   }
 
   const totalWritten = await batch.commitAll();
+
+  // Simpan ringkasan bulan ini (efek samping dari scan yang sudah terjadi
+  // di atas, tanpa scan tambahan) - dipakai supaya filter "satu bulan
+  // penuh" di Ringkasan bisa instan tanpa perlu tombol hitung terpisah.
+  const totalActiveThisMonth = monthNewCustomerCount + monthOldCustomerCount;
+  const totalCustomersAllTimeSnap = await db.collection('customers').count().get();
+  await db.collection('analytics_cache').doc(`ringkasan_monthly_${yearMonthKey}`).set({
+    year_month: yearMonthKey,
+    total_customers_all_time: totalCustomersAllTimeSnap.data().count,
+    total_nominal: monthTotalNominal,
+    total_margin: monthTotalMargin,
+    order_count: monthOrderCount,
+    margin_pct: monthTotalNominal ? (monthTotalMargin / monthTotalNominal * 100) : 0,
+    old_revenue_pct: monthTotalNominal ? (monthOldRevenue / monthTotalNominal * 100) : 0,
+    repeat_rate_avg: totalActiveThisMonth ? (monthOrderCount / totalActiveThisMonth) : 0,
+    old_count: monthOldCustomerCount,
+    new_count: monthNewCustomerCount,
+    old_pct: totalActiveThisMonth ? (monthOldCustomerCount / totalActiveThisMonth * 100) : 0,
+    new_pct: totalActiveThisMonth ? (monthNewCustomerCount / totalActiveThisMonth * 100) : 0,
+    total_customers_in_period: totalActiveThisMonth,
+    computed_at: admin.firestore.FieldValue.serverTimestamp(),
+  }, { merge: true });
+
   return { processed, skipped, totalWritten, evalMonth: yearMonthKey };
 }
 
