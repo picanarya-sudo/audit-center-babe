@@ -630,10 +630,12 @@ const firebaseConfig = {
       });
       resultEl.innerHTML = `
         <button class="dl-btn" id="dl-churn-btn">⬇ Download CSV</button>
+        <button class="dl-btn" id="recompute-churn-btn-2" style="margin-left:8px;">↻ Hitung Ulang Bulan Ini</button>
         <table class="an-table"><thead><tr><th>Nama</th><th>HP</th><th>Terakhir Beli</th><th>Avg Margin/Transaksi</th></tr></thead><tbody>
         ${rows.map(r => `<tr><td style="text-transform:capitalize">${r['Nama Customer']}</td><td class="mono">${r['No HP']}</td><td class="mono">${r['Tanggal Terakhir Beli']}</td><td class="mono">Rp${r['Rata-rata Margin per Transaksi'].toLocaleString('id-ID')}</td></tr>`).join('')}
         </tbody></table>`;
       document.getElementById('dl-churn-btn').addEventListener('click', () => downloadCsv(`churn_${churnMode}_${month}.csv`, rows));
+      document.getElementById('recompute-churn-btn-2').addEventListener('click', () => computeChurnForMonth(month, churnMode));
     } catch (e) {
       resultEl.innerHTML = `<div class="warnbox">Query gagal: ${e.message} (kemungkinan butuh composite index - cek link di error console/DevTools)</div>`;
     }
