@@ -147,14 +147,14 @@
   // TODO: GANTI dengan config project Firebase asli. Placeholder ini
   // sengaja dibuat gagal supaya tidak ada kesan "sudah jalan" padahal
   // belum diisi.
-const firebaseConfig = {
-  apiKey: "AIzaSyBXw1VPrusJDgwjbfkBp3J9PyVBEGqGA3U",
-  authDomain: "audit-center-babe.firebaseapp.com",
-  projectId: "audit-center-babe",
-  storageBucket: "audit-center-babe.firebasestorage.app",
-  messagingSenderId: "95941509340",
-  appId: "1:95941509340:web:8f6a3c7c0d6b0e239eb419"
-};
+  const firebaseConfig = {
+    apiKey: "GANTI_DENGAN_API_KEY_ASLI",
+    authDomain: "GANTI.firebaseapp.com",
+    projectId: "GANTI_PROJECT_ID",
+    storageBucket: "GANTI.appspot.com",
+    messagingSenderId: "GANTI",
+    appId: "GANTI",
+  };
   if (!firebaseConfig.apiKey.startsWith("GANTI")) {
     // ok, config sudah diisi
   } else {
@@ -463,6 +463,33 @@ const firebaseConfig = {
     const from = document.getElementById('ring-from').value;
     const to = document.getElementById('ring-to').value;
     if (!from || !to) return;
+
+    // Jalur cepat: kalau periode yang dipilih PERSIS satu bulan kalender
+    // penuh (tanggal 1 sampai akhir bulan yang sama), baca langsung dari
+    // cache bulanan yang dihasilkan otomatis oleh proses hitung churn -
+    // INSTAN, tidak perlu tombol hitung sama sekali.
+    const wholeMonth = getWholeMonthIfApplicable(from, to);
+    if (wholeMonth) {
+      try {
+        const cacheSnap = await getDoc(doc(db, 'analytics_cache', `ringkasan_monthly_${wholeMonth}`));
+        if (cacheSnap.exists()) {
+          renderRingkasanCards(cacheSnap.data());
+          return;
+        }
+        // Belum pernah dihitung sama sekali untuk bulan ini (termasuk lewat
+        // proses churn) - tetap perlu dihitung sekali, tapi lewat tombol
+        // "Hitung Churn Bulan Ini" di kategori Churn (satu proses yang sama
+        // menghasilkan ringkasan bulanan ini juga).
+        grid.innerHTML = `<div class="kpi-card na" style="grid-column:1/-1;">
+          <div class="kv" style="font-size:15px;">Bulan ${wholeMonth} belum pernah dihitung</div>
+          <div class="ks">Buka kategori "Data Customer Churn", pilih bulan ini, klik "Hitung Churn Bulan Ini" - proses itu sekalian menghasilkan ringkasan ini. Setelah itu, kembali ke sini akan langsung instan.</div>
+        </div>`;
+        return;
+      } catch (e) {
+        // lanjut ke jalur biasa di bawah kalau ada error tak terduga
+      }
+    }
+
     // Perhitungan berat (scan semua order + klasifikasi customer) sekarang
     // dilakukan di Cloud Function, bukan di browser - lihat catatan di
     // computeRingkasanForPeriod (functions/index.js). Di sini cuma baca
@@ -473,7 +500,7 @@ const firebaseConfig = {
       if (!cacheSnap.exists()) {
         grid.innerHTML = `<div class="kpi-card na" style="grid-column:1/-1;">
           <div class="kv" style="font-size:15px;">Periode ini belum pernah dihitung</div>
-          <div class="ks">Perhitungan dilakukan di server (bukan browser) supaya tidak macet untuk data besar.
+          <div class="ks">Perhitungan dilakukan di server (bukan browser) supaya tidak macet untuk data besar. Tips: pilih satu bulan kalender penuh (tanggal 1 - akhir bulan) untuk hasil instan tanpa tombol ini.
           <button id="compute-ringkasan-btn" style="margin-left:8px;background:var(--accent);color:#fff;border:none;padding:6px 14px;border-radius:6px;cursor:pointer;">Hitung Ringkasan Periode Ini</button></div>
         </div>`;
         document.getElementById('compute-ringkasan-btn').addEventListener('click', () => computeRingkasanForPeriod(from, to));
@@ -496,6 +523,19 @@ const firebaseConfig = {
     ];
     grid.innerHTML = cards.map(c => `<div class="kpi-card"><div class="kv">${c.v}</div><div class="kl">${c.l}</div><div class="ks">${c.s}</div></div>`).join('') +
       `<div style="grid-column:1/-1;font-size:10.5px;color:var(--ct-text-faint);margin-top:-6px;">Dihitung terakhir kali - cache tersimpan di server. Klik "Terapkan" lagi untuk cek ulang, atau ganti tanggal untuk periode baru.</div>`;
+  }
+
+  // Cek apakah from-to persis satu bulan kalender penuh (tanggal 1 sampai
+  // hari terakhir bulan yang sama). Return "YYYY-MM" kalau iya, null kalau
+  // bukan (custom range, atau lintas beberapa bulan).
+  function getWholeMonthIfApplicable(from, to) {
+    const fromDate = new Date(from + 'T00:00:00');
+    const toDate = new Date(to + 'T00:00:00');
+    if (fromDate.getDate() !== 1) return null;
+    const lastDayOfMonth = new Date(fromDate.getFullYear(), fromDate.getMonth() + 1, 0).getDate();
+    if (toDate.getFullYear() !== fromDate.getFullYear() || toDate.getMonth() !== fromDate.getMonth()) return null;
+    if (toDate.getDate() !== lastDayOfMonth) return null;
+    return `${fromDate.getFullYear()}-${String(fromDate.getMonth() + 1).padStart(2, '0')}`;
   }
 
   function sanitizeForFsId(s) {
